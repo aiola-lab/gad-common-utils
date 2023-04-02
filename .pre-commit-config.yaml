@@ -1,0 +1,12 @@
+repos:
+-   repo: https://github.com/ambv/black
+    # when this version is changed you MUST change the version of black in https://github.com/aiola-lab/gad-deliveries/blob/master/.github/workflows/black-format-checker.yml
+    rev: 23.1.0
+    hooks:
+    - id: black
+      language_version: python
+- repo: https://github.com/pycqa/isort
+  rev: 5.11.5
+  hooks:
+    - id: isort
+      args: ["--profile", "black", "--filter-files"]

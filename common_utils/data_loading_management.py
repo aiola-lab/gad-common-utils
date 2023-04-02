@@ -3,8 +3,9 @@ import logging
 from datetime import datetime
 
 import awswrangler as wr
-from date_time_methods import dateTimeMethods
 from dateutil.relativedelta import relativedelta
+
+from common_utils.date_time_methods import dateTimeMethods
 
 
 class dataLoadingManagement:
