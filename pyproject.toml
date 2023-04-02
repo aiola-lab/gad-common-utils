@@ -1,0 +1,27 @@
+[project]
+name = "gad_common_utils"
+dynamic = ["version"]
+description = "gad utility"
+readme = "Readme.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "boto3",
+    "awswrangler",
+    "pandas"
+]
+
+[build-system]
+requires = ["setuptools>=45", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+"Homepage" = "http://gad-co.ml"
+
+# generates dynamic version
+[tool.setuptools_scm]
+write_to = "common_utils/_version.py"

@@ -1,0 +1,31 @@
+name: Black Format Checker
+
+on:
+  pull_request:
+    paths:
+      - '**/*.py'
+
+jobs:
+  black:
+    name: Black Format Checker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.7'
+      - name: Install Black
+        run: |
+          python -m pip install --upgrade pip
+          pip install black==23.1.0
+      - name: Check formatting
+        run: |
+          # filter changed python files excluding deleted and renamed files
+          files=$(git --no-pager diff --diff-filter=dr --name-only origin/master..HEAD | grep '.py$' || true)
+          if [ -n "$files" ]; then
+            # If there are changed files, check the formatting with Black
+            black $files --check
+          fi
