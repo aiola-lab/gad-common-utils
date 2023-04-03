@@ -17,7 +17,7 @@ def return_dag_ingrediants(project):
     Returns:
         paths (dict): A dictionary containing various file paths.
         default_args (dict): A dictionary containing default arguments for the DAG.
-        environment (list): A list of Kubernetes environment variables.
+        envConfigMap (k8s.V1EnvFromSource): A reference to configmap that maps environment variables.
         volume (k8s.V1Volume): A Kubernetes volume.
         volume_mount (k8s.V1VolumeMount): A Kubernetes volume mount.
     """
@@ -48,8 +48,14 @@ def return_dag_ingrediants(project):
         "retries": 0,
         "retry_delay": timedelta(seconds=10),
     }
-
-    environment = []
+    configMapEnvSource = k8s.V1ConfigMapEnvSource(
+        name="gad-configmap",
+        optional=False
+    )
+    envFromSource = k8s.V1EnvFromSource(
+        config_map_ref=configMapEnvSource
+    )
+    # environment = []
 
     # environment = [
     #     k8s.V1EnvVar(name="PROJECTDIR", value="value1"),
@@ -71,7 +77,7 @@ def return_dag_ingrediants(project):
     volumes = [volume]
     volumes_mounts = [volume_mount]
 
-    return paths, default_args, environment, volumes, volumes_mounts
+    return paths, default_args, envFromSource, volumes, volumes_mounts
 
 
 def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: list):
@@ -88,11 +94,9 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         dag (DAG): A DAG object.
     """
 
-    paths, default_args, environment, volumes, volumes_mounts = return_dag_ingrediants(
+    paths, default_args, envConfigMap, volumes, volumes_mounts = return_dag_ingrediants(
         project
     )
-
-    environment = environment
 
     def return_image_name(task_type):
         """
@@ -132,7 +136,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         if task_dict["task_type"] == "dbt":
             return ["dbt", task_dict["executable"]]
         elif task_dict["task_type"] == "python":
-            return ["python ", f"{paths['PYTHON_DIR']}/{task_dict['executable']}.py"]
+            return ["python", f"{paths['PYTHON_DIR']}/{task_dict['executable']}.py"]
 
     def return_command_args(task_dict: dict, configs: dict) -> list:
         """Returns a list of command-line arguments based on task_dict and configs.
@@ -178,9 +182,16 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 dbt_all_args = dbt_default_args_and_models
 
             return dbt_all_args
+
         elif task_dict["task_type"] == "python":
             python_args = configs.get("python_args")
-            return python_args
+            list_args = []
+            if python_args:
+                for key in python_args:
+                    list_args.append(f"--{key}")
+                    if python_args[key]:
+                        list_args.append(python_args[key])
+            return list_args
 
     def return_configs() -> dict:
         """
@@ -225,6 +236,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             volumes=volumes,
             volume_mounts=volumes_mounts,
             env_vars=env_vars,
+            env_from=[envConfigMap],
             namespace="default",
             labels={"Task": task["task_type"]},
             image_pull_policy="Never",
