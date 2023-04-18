@@ -47,6 +47,7 @@ def return_dag_ingrediants(project):
         "catchup": False,
         "retries": 0,
         "retry_delay": timedelta(seconds=10),
+        'provide_context': True
     }
     configMapEnvSource = k8s.V1ConfigMapEnvSource(
         name="gad-configmap",
@@ -161,6 +162,13 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         in the 'python_args' key of the configs dictionary.
         """
 
+
+
+        if task_dict['xcom_pull_task_id']:
+            xcom_val = {'xcom_value': "{{ ti.xcom_pull(task_ids=['" + task_dict['xcom_pull_task_id'] + "']) }}"}
+        else: 
+            xcom_val = {}
+            
         if task_dict["task_type"] == "dbt":
             dbt_default_args = [
                 "--project-dir",
@@ -177,14 +185,19 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
 
             dbt_vars = configs.get("dbt_vars")
             if dbt_vars:
+                dbt_vars.update(xcom_val)
                 dbt_all_args = dbt_default_args_and_models + ["--vars", str(dbt_vars)]
             else:
-                dbt_all_args = dbt_default_args_and_models
+                dbt_all_args = dbt_default_args_and_models + ["--vars", str(xcom_val)]
 
             return dbt_all_args
 
         elif task_dict["task_type"] == "python":
-            python_args = configs.get("python_args")
+            if configs.get("python_args"):
+                python_args = configs.get("python_args")
+            else:
+                python_args = {}
+            python_args.update(xcom_val)
             list_args = []
             if python_args:
                 for key in python_args:
@@ -248,6 +261,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             cmds=cmds,
             arguments=arguments,
             dag=dag,
+            do_xcom_push=task["xcom_push"]
         )
         kubernetes_tasks[task["task_id"]] = kubernetes_task
 
