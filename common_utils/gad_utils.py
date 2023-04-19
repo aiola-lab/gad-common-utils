@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import timedelta
+import subprocess
 
 from airflow.contrib.operators.kubernetes_pod_operator import KubernetesPodOperator
 from airflow.utils.dates import days_ago
@@ -80,7 +81,6 @@ def return_dag_ingrediants(project):
 
     return paths, default_args, envFromSource, volumes, volumes_mounts
 
-
 def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: list):
     """
     Creates a DAG using the specified parameters.
@@ -114,6 +114,32 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             return "gad-dbt:0.1"
         elif task_type == "python":
             return "gad-papermill:0.1"
+    
+    def is_xcom_push_task(task_dict: dict):
+            if 'xcom_push' in task_dict.keys():
+                return task_dict['xcom_push']
+            else:
+                return False  
+            
+    def extract_xcom_values(task_dict: dict):
+    
+            def extract_xcom_data(task_id:str):
+                # return list("{{ ti.xcom_pull(task_ids=['" + task_id + "']) }}")
+                return [{'start_date': '2023-04-19 14:04:26.278129'}, {'engineer': 'Yaniv Vainer'}, {'age': '12'}]    
+            
+            return_dict = {}
+            if 'xcom_pull' in task_dict.keys():
+                task_id = task_dict['xcom_pull']['task']
+                raw_xcom = extract_xcom_data(task_id)
+                xcoms = task_dict['xcom_pull']['xcoms']
+
+                return_dict = {}
+                for i in raw_xcom:
+                    key,value = list(i.items())[0]
+                    if key in xcoms:
+                        return_dict[key] = value
+
+            return return_dict
 
     def return_cmds(task_dict: dict) -> list:
         """Returns a list of command-line commands based on task_dict.
@@ -162,12 +188,12 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         in the 'python_args' key of the configs dictionary.
         """
 
+        xcom_val = extract_xcom_values(task_dict)
 
-
-        if task_dict['xcom_pull_task_id']:
-            xcom_val = {'xcom_value': "{{ ti.xcom_pull(task_ids=['" + task_dict['xcom_pull_task_id'] + "']) }}"}
-        else: 
-            xcom_val = {}
+        # if task_dict['xcom_pull_task_id']:
+        #     xcom_val = {'xcom_value': "{{ ti.xcom_pull(task_ids=['" + task_dict['xcom_pull'] + "']) }}"}
+        # else: 
+        #     xcom_val = {}
             
         if task_dict["task_type"] == "dbt":
             dbt_default_args = [
@@ -261,7 +287,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             cmds=cmds,
             arguments=arguments,
             dag=dag,
-            do_xcom_push=task["xcom_push"]
+            do_xcom_push=is_xcom_push_task(task)
         )
         kubernetes_tasks[task["task_id"]] = kubernetes_task
 
