@@ -7,8 +7,8 @@ def write_xcom_to_file(xcom_names,xcom_values):
     str_list = []
     for i in range(len(xcom_names)):
         str_list.append(f'\"{xcom_names[i]}\": \"{xcom_values[i]}\"')
-    new_dict = "[{"+"}, {".join(str_list)+"}"+"]" 
-
+    new_dict = "[{" + ", ".join(str_list) + "}]"
+ 
     bash_command = ["sh", "-c"]
     cmd = f"mkdir -p ../airflow/xcom/;echo '{new_dict}' > ../airflow/xcom/return.json"
     bash_command.append(cmd)
