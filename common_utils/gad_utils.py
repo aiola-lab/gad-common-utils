@@ -214,9 +214,11 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             dbt_vars = configs.get("dbt_vars")
             if dbt_vars:
                 dbt_vars.update(xcom_val)
-                dbt_all_args = dbt_default_args_and_models + ["--vars", str(dbt_vars)]
+                dbt_all_args = dbt_default_args_and_models + ["--vars", json.dumps(dbt_vars)]
+            elif bool(xcom_val):
+                dbt_all_args = dbt_default_args_and_models + ["--vars", json.dumps(xcom_val)]
             else:
-                dbt_all_args = dbt_default_args_and_models + ["--vars", str(xcom_val)]
+                dbt_all_args = dbt_default_args_and_models
 
             return dbt_all_args
 
