@@ -2,14 +2,13 @@ import json
 import os
 from datetime import timedelta
 
+from airflow import DAG
 from airflow.contrib.operators.kubernetes_pod_operator import KubernetesPodOperator
+from airflow.decorators import dag, task
 from airflow.operators.python_operator import PythonOperator
 from airflow.utils.dates import days_ago
 from kubernetes.client import models as k8s
-from airflow.decorators import dag,task
-from airflow import DAG
 
-import ast
 
 def return_dag_ingrediants(project):
     """
@@ -52,16 +51,11 @@ def return_dag_ingrediants(project):
         "catchup": False,
         "retries": 0,
         "retry_delay": timedelta(seconds=10),
-        'provide_context': True
+        "provide_context": True,
     }
-    configMapEnvSource = k8s.V1ConfigMapEnvSource(
-        name="gad-configmap",
-        optional=False
-    )
-    envFromSource = k8s.V1EnvFromSource(
-        config_map_ref=configMapEnvSource
-    )
-    
+    configMapEnvSource = k8s.V1ConfigMapEnvSource(name="gad-configmap", optional=False)
+    envFromSource = k8s.V1EnvFromSource(config_map_ref=configMapEnvSource)
+
     volume_mount = k8s.V1VolumeMount(
         name="project-volume",
         mount_path="/opt/aiola/projects",
@@ -78,6 +72,7 @@ def return_dag_ingrediants(project):
     volumes_mounts = [volume_mount]
 
     return paths, default_args, envFromSource, volumes, volumes_mounts
+
 
 def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: list):
     """
@@ -112,7 +107,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             return "gad-dbt:0.1"
         elif task_type == "python":
             return "gad-papermill:0.1"
-    
+
     def is_xcom_push_task(task_dict: dict):
         """
         This function checks if a given task dictionary specifies that its output should be pushed to XCom.
@@ -123,12 +118,12 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         Returns:
             bool: True if the task's output should be pushed to XCom, False otherwise.
         """
-        if 'xcom_push' in task_dict.keys():
-            return task_dict['xcom_push']
+        if "xcom_push" in task_dict.keys():
+            return task_dict["xcom_push"]
         else:
-            return False  
-    
-    def extract_xcom_data(task_dict:dict):
+            return False
+
+    def extract_xcom_data(task_dict: dict):
         """
         This function extracts XCom data from a given task dictionary.
 
@@ -139,14 +134,19 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             dict: A dictionary containing the XCom data for the task.
         """
         return_dict = {}
-        if 'xcom_pull' in task_dict.keys():            
-            task_id = task_dict['xcom_pull']['task']
-            xcoms_list = task_dict['xcom_pull']['xcoms']                   
+        if "xcom_pull" in task_dict.keys():
+            task_id = task_dict["xcom_pull"]["task"]
+            xcoms_list = task_dict["xcom_pull"]["xcoms"]
             for xcom in xcoms_list:
-                value = "{{ ti.xcom_pull(task_ids=['" + task_id + "_service_task'], key='"+ xcom +"') }}"
+                value = (
+                    "{{ ti.xcom_pull(task_ids=['"
+                    + task_id
+                    + "_service_task'], key='"
+                    + xcom
+                    + "') }}"
+                )
                 return_dict[xcom] = value
-        return return_dict  
-        
+        return return_dict
 
     def return_cmds(task_dict: dict) -> list:
         """Returns a list of command-line commands based on task_dict.
@@ -196,7 +196,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         """
 
         xcom_val = extract_xcom_data(task_dict)
-            
+
         if task_dict["task_type"] == "dbt":
             dbt_default_args = [
                 "--project-dir",
@@ -214,9 +214,15 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             dbt_vars = configs.get("dbt_vars")
             if dbt_vars:
                 dbt_vars.update(xcom_val)
-                dbt_all_args = dbt_default_args_and_models + ["--vars", json.dumps(dbt_vars)]
+                dbt_all_args = dbt_default_args_and_models + [
+                    "--vars",
+                    json.dumps(dbt_vars),
+                ]
             elif bool(xcom_val):
-                dbt_all_args = dbt_default_args_and_models + ["--vars", json.dumps(xcom_val)]
+                dbt_all_args = dbt_default_args_and_models + [
+                    "--vars",
+                    json.dumps(xcom_val),
+                ]
             else:
                 dbt_all_args = dbt_default_args_and_models
 
@@ -252,7 +258,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             j = f.read()
         return json.loads(j)
 
-    def parse_xcoms(task_id,**kwargs):
+    def parse_xcoms(task_id, **kwargs):
         """
         This function extracts XCom data from a specified task instance and pushes the data to XCom with individual keys.
 
@@ -264,12 +270,12 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         Returns:
             None
         """
-        task_instance = kwargs['ti']
+        task_instance = kwargs["ti"]
         value = task_instance.xcom_pull(task_ids=task_id)
         for i in value[0][0].keys():
-            print('xcom push','key',i,'val',value[0][0][i])
-            task_instance.xcom_push(key=i,value=value[0][0][i])
-              
+            print("xcom push", "key", i, "val", value[0][0][i])
+            task_instance.xcom_push(key=i, value=value[0][0][i])
+
     # dag creation
     dag = DAG(
         dag_id=dag_id,
@@ -291,40 +297,43 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
     """
 
     # Define an empty list to store new tasks
-    new_tasks_list=[]
+    new_tasks_list = []
 
     # Iterate through the original tasks list and add each task to the new list
     # If a task has an xcom_push attribute set to True, create a new service task and add it to the new list
     for i, task in enumerate(tasks):
         new_tasks_list.append(task)
-        if 'xcom_push' in task.keys():
-            if task['xcom_push']:
-                previous_task_id = task['task_id']
-                service_task = {'task_id': f'{previous_task_id}_service_task', 'service': True, 'upstream': [previous_task_id]}
+        if "xcom_push" in task.keys():
+            if task["xcom_push"]:
+                previous_task_id = task["task_id"]
+                service_task = {
+                    "task_id": f"{previous_task_id}_service_task",
+                    "service": True,
+                    "upstream": [previous_task_id],
+                }
                 new_tasks_list.append(service_task)
 
     # Set upstream dependencies for each task in the new list
     for i, task in enumerate(new_tasks_list):
-        if i>0:
-            if 'service' in new_tasks_list[i-1].keys():
-                new_tasks_list[i]['upstream'] = [new_tasks_list[i-1]['task_id']]
+        if i > 0:
+            if "service" in new_tasks_list[i - 1].keys():
+                new_tasks_list[i]["upstream"] = [new_tasks_list[i - 1]["task_id"]]
 
     # Define a dictionary to store KubernetesPodOperator and PythonOperator tasks
     kubernetes_tasks = {}
 
     # Iterate through each task in the new list and create a KubernetesPodOperator or PythonOperator task based on its properties
-    for i,task in enumerate(new_tasks_list):
-
+    for i, task in enumerate(new_tasks_list):
         # If the task is a service task, create a PythonOperator with parse_xcoms function as its callable
-        if 'service' in task.keys():
+        if "service" in task.keys():
             service_task = PythonOperator(
-                task_id=task['task_id'],
+                task_id=task["task_id"],
                 python_callable=parse_xcoms,
-                op_args=[task['upstream']],
-                dag=dag
-                )
+                op_args=[task["upstream"]],
+                dag=dag,
+            )
             kubernetes_tasks[task["task_id"]] = service_task
-            
+
         # If the task is not a service task, create a KubernetesPodOperator
         else:
             cmds = return_cmds(task)
@@ -347,7 +356,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 cmds=cmds,
                 arguments=arguments,
                 dag=dag,
-                do_xcom_push=is_xcom_push_task(task)
+                do_xcom_push=is_xcom_push_task(task),
             )
             kubernetes_tasks[task["task_id"]] = kubernetes_task
 
