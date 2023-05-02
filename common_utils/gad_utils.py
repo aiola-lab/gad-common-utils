@@ -2,26 +2,29 @@ import json
 import os
 from datetime import timedelta
 
+from airflow import DAG
 from airflow.contrib.operators.kubernetes_pod_operator import KubernetesPodOperator
+from airflow.operators.python_operator import PythonOperator
 from airflow.utils.dates import days_ago
 from kubernetes.client import models as k8s
-
-from airflow import DAG
 
 
 def return_dag_ingrediants(project):
     """
-    Args:
-        project (str): The name of the project.
+    This function returns a tuple that contains various objects used in an Airflow DAG
+    for the specified project.
+
+    Parameters:
+        project (str): The name of the project for which to return the DAG ingredients.
 
     Returns:
-        paths (dict): A dictionary containing various file paths.
-        default_args (dict): A dictionary containing default arguments for the DAG.
-        envConfigMap (k8s.V1EnvFromSource): A reference to configmap that maps environment variables.
-        volume (k8s.V1Volume): A Kubernetes volume.
-        volume_mount (k8s.V1VolumeMount): A Kubernetes volume mount.
+        tuple: A tuple containing the following objects:
+            - paths (dict): A dictionary that maps path-related variables to their respective names.
+            - default_args (dict): A dictionary that specifies default arguments for the DAG.
+            - envFromSource (k8s.V1EnvFromSource): An object that specifies the ConfigMap to use as a source of environment variables.
+            - volumes (list): A list of V1Volume objects that specify the volumes to mount in the Kubernetes Pod.
+            - volumes_mounts (list): A list of V1VolumeMount objects that specify the volume mounts to use in the Kubernetes Pod.
     """
-
     WORK_DIR = "/opt/aiola/projects"
     SUB_FOLDER = os.environ.get("DEPLOYMENT_DIR", "gad-deliveries")
     PROJECT_DIR = f"{WORK_DIR}/{SUB_FOLDER}/{project}"
@@ -47,21 +50,11 @@ def return_dag_ingrediants(project):
         "catchup": False,
         "retries": 0,
         "retry_delay": timedelta(seconds=10),
+        "provide_context": True,
     }
-    configMapEnvSource = k8s.V1ConfigMapEnvSource(
-        name="gad-configmap",
-        optional=False
-    )
-    envFromSource = k8s.V1EnvFromSource(
-        config_map_ref=configMapEnvSource
-    )
-    # environment = []
+    configMapEnvSource = k8s.V1ConfigMapEnvSource(name="gad-configmap", optional=False)
+    envFromSource = k8s.V1EnvFromSource(config_map_ref=configMapEnvSource)
 
-    # environment = [
-    #     k8s.V1EnvVar(name="PROJECTDIR", value="value1"),
-    #     k8s.V1EnvVar(name="key2", value="value2"),
-    # ]
-    
     volume_mount = k8s.V1VolumeMount(
         name="project-volume",
         mount_path="/opt/aiola/projects",
@@ -114,6 +107,46 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         elif task_type == "python":
             return "gad-papermill:0.1"
 
+    def is_xcom_push_task(task_dict: dict):
+        """
+        This function checks if a given task dictionary specifies that its output should be pushed to XCom.
+
+        Parameters:
+            task_dict (dict): A dictionary that represents a task in an Airflow DAG.
+
+        Returns:
+            bool: True if the task's output should be pushed to XCom, False otherwise.
+        """
+        if "xcom_push" in task_dict.keys():
+            return task_dict["xcom_push"]
+        else:
+            return False
+
+    def extract_xcom_data(task_dict: dict):
+        """
+        This function extracts XCom data from a given task dictionary.
+
+        Parameters:
+            task_dict (dict): A dictionary that represents a task in an Airflow DAG.
+
+        Returns:
+            dict: A dictionary containing the XCom data for the task.
+        """
+        return_dict = {}
+        if "xcom_pull" in task_dict.keys():
+            task_id = task_dict["xcom_pull"]["task"]
+            xcoms_list = task_dict["xcom_pull"]["xcoms"]
+            for xcom in xcoms_list:
+                value = (
+                    "{{ ti.xcom_pull(task_ids=['"
+                    + task_id
+                    + "_service_task'], key='"
+                    + xcom
+                    + "') }}"
+                )
+                return_dict[xcom] = value
+        return return_dict
+
     def return_cmds(task_dict: dict) -> list:
         """Returns a list of command-line commands based on task_dict.
 
@@ -161,6 +194,8 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         in the 'python_args' key of the configs dictionary.
         """
 
+        xcom_val = extract_xcom_data(task_dict)
+
         if task_dict["task_type"] == "dbt":
             dbt_default_args = [
                 "--project-dir",
@@ -177,14 +212,27 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
 
             dbt_vars = configs.get("dbt_vars")
             if dbt_vars:
-                dbt_all_args = dbt_default_args_and_models + ["--vars", str(dbt_vars)]
+                dbt_vars.update(xcom_val)
+                dbt_all_args = dbt_default_args_and_models + [
+                    "--vars",
+                    json.dumps(dbt_vars),
+                ]
+            elif bool(xcom_val):
+                dbt_all_args = dbt_default_args_and_models + [
+                    "--vars",
+                    json.dumps(xcom_val),
+                ]
             else:
                 dbt_all_args = dbt_default_args_and_models
 
             return dbt_all_args
 
         elif task_dict["task_type"] == "python":
-            python_args = configs.get("python_args")
+            if configs.get("python_args"):
+                python_args = configs.get("python_args")
+            else:
+                python_args = {}
+            python_args.update(xcom_val)
             list_args = []
             if python_args:
                 for key in python_args:
@@ -209,6 +257,24 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             j = f.read()
         return json.loads(j)
 
+    def parse_xcoms(task_id, **kwargs):
+        """
+        This function extracts XCom data from a specified task instance and pushes the data to XCom with individual keys.
+
+        Parameters:
+            task_id (str): The ID of the task instance from which to extract XCom data.
+            **kwargs: A dictionary containing additional keyword arguments. This dictionary must contain the 'ti' key, which
+                    provides the task instance.
+
+        Returns:
+            None
+        """
+        task_instance = kwargs["ti"]
+        value = task_instance.xcom_pull(task_ids=task_id)
+        for i in value[0][0].keys():
+            print("xcom push", "key", i, "val", value[0][0][i])
+            task_instance.xcom_push(key=i, value=value[0][0][i])
+
     # dag creation
     dag = DAG(
         dag_id=dag_id,
@@ -221,40 +287,83 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
     configs = return_configs()
     env_vars = configs.get("env_vars")
 
-    # This code is a loop that iterates over a list of tasks and creates a KubernetesPodOperator object for each task.
-    # return_command_args() function is used to obtain the command arguments for the task.
-    # return_image_name() function is used to get the image name based on the task type.
-    # return_configs() function is used to get environment variables.
-    # The KubernetesPodOperator object is then created using these variables and appended to a dictionary named kubernetes_tasks with the task ID as the key.
-    kubernetes_tasks = {}
+    """
+    This code is a loop that iterates over a list of tasks and creates a KubernetesPodOperator object for each task.
+    return_command_args() function is used to obtain the command arguments for the task.
+    return_image_name() function is used to get the image name based on the task type.
+    return_configs() function is used to get environment variables.
+    The KubernetesPodOperator object is then created using these variables and appended to a dictionary named kubernetes_tasks with the task ID as the key.
+    """
+
+    # Define an empty list to store new tasks
+    new_tasks_list = []
+
+    # Iterate through the original tasks list and add each task to the new list
+    # If a task has an xcom_push attribute set to True, create a new service task and add it to the new list
     for task in tasks:
-        cmds = return_cmds(task)
-        arguments = return_command_args(task, configs)
-        image = return_image_name(task["task_type"])
+        new_tasks_list.append(task)
+        if "xcom_push" in task.keys():
+            if task["xcom_push"]:
+                previous_task_id = task["task_id"]
+                service_task = {
+                    "task_id": f"{previous_task_id}_service_task",
+                    "service": True,
+                    "upstream": [previous_task_id],
+                }
+                new_tasks_list.append(service_task)
 
-        kubernetes_task = KubernetesPodOperator(
-            volumes=volumes,
-            volume_mounts=volumes_mounts,
-            env_vars=env_vars,
-            env_from=[envConfigMap],
-            namespace="default",
-            labels={"Task": task["task_type"]},
-            image_pull_policy="Never",
-            name=task["task_id"],
-            task_id=task["task_id"],
-            is_delete_operator_pod=True,
-            get_logs=True,
-            image=image,
-            cmds=cmds,
-            arguments=arguments,
-            dag=dag,
-        )
-        kubernetes_tasks[task["task_id"]] = kubernetes_task
+    # Set upstream dependencies for each task in the new list
+    for i, task in enumerate(new_tasks_list):
+        if i > 0:
+            if "service" in new_tasks_list[i - 1].keys():
+                new_tasks_list[i]["upstream"] = [new_tasks_list[i - 1]["task_id"]]
 
-    # using tge tasks list, and the kubernetes_tasks dictionary - this loop creates the dependancies.
+    # Define a dictionary to store KubernetesPodOperator and PythonOperator tasks
+    kubernetes_tasks = {}
+
+    # Iterate through each task in the new list and create a KubernetesPodOperator or PythonOperator task based on its properties
+    for task in new_tasks_list:
+        # If the task is a service task, create a PythonOperator with parse_xcoms function as its callable
+        if "service" in task.keys():
+            service_task = PythonOperator(
+                task_id=task["task_id"],
+                python_callable=parse_xcoms,
+                op_args=[task["upstream"]],
+                dag=dag,
+            )
+            kubernetes_tasks[task["task_id"]] = service_task
+
+        # If the task is not a service task, create a KubernetesPodOperator
+        else:
+            cmds = return_cmds(task)
+            arguments = return_command_args(task, configs)
+            image = return_image_name(task["task_type"])
+
+            kubernetes_task = KubernetesPodOperator(
+                volumes=volumes,
+                volume_mounts=volumes_mounts,
+                env_vars=env_vars,
+                env_from=[envConfigMap],
+                namespace="default",
+                labels={"Task": task["task_type"]},
+                image_pull_policy="Never",
+                name=task["task_id"],
+                task_id=task["task_id"],
+                is_delete_operator_pod=True,
+                get_logs=True,
+                image=image,
+                cmds=cmds,
+                arguments=arguments,
+                dag=dag,
+                do_xcom_push=is_xcom_push_task(task),
+            )
+            kubernetes_tasks[task["task_id"]] = kubernetes_task
+
+    # using the tasks list, and the kubernetes_tasks dictionary - this loop creates the dependancies.
     # each task in tasks contains a value in the 'upstream' key that tells what is the pervious task (or tasks).
     # the kubernates operator created gets the dependancies and is configured to use them with the set_upstream setting.
-    for task in tasks:
+
+    for task in new_tasks_list:
         if task["upstream"] is None or task["upstream"] == "" or task["upstream"] == []:
             pass
         else:
