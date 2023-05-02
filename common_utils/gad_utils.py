@@ -4,7 +4,6 @@ from datetime import timedelta
 
 from airflow import DAG
 from airflow.contrib.operators.kubernetes_pod_operator import KubernetesPodOperator
-from airflow.decorators import dag, task
 from airflow.operators.python_operator import PythonOperator
 from airflow.utils.dates import days_ago
 from kubernetes.client import models as k8s
@@ -301,7 +300,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
 
     # Iterate through the original tasks list and add each task to the new list
     # If a task has an xcom_push attribute set to True, create a new service task and add it to the new list
-    for i, task in enumerate(tasks):
+    for task in tasks:
         new_tasks_list.append(task)
         if "xcom_push" in task.keys():
             if task["xcom_push"]:
@@ -323,7 +322,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
     kubernetes_tasks = {}
 
     # Iterate through each task in the new list and create a KubernetesPodOperator or PythonOperator task based on its properties
-    for i, task in enumerate(new_tasks_list):
+    for task in new_tasks_list:
         # If the task is a service task, create a PythonOperator with parse_xcoms function as its callable
         if "service" in task.keys():
             service_task = PythonOperator(
