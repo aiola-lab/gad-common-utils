@@ -1,3 +1,4 @@
 _version.py
 *.egg-info/
-common_utils/__pycache__/**/*
+common_utils/__pycache__/**
+.pyc
