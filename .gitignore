@@ -1,1 +1,3 @@
 _version.py
+*.egg-info/
+common_utils/__pycache__/*
