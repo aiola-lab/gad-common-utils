@@ -4,9 +4,12 @@ from datetime import timedelta
 
 from airflow import DAG
 from airflow.contrib.operators.kubernetes_pod_operator import KubernetesPodOperator
+from airflow.exceptions import AirflowException
 from airflow.operators.python_operator import PythonOperator
 from airflow.utils.dates import days_ago
 from kubernetes.client import models as k8s
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
 
 
 def return_dag_ingrediants(project):
@@ -275,6 +278,102 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             print("xcom push", "key", i, "val", value[0][0][i])
             task_instance.xcom_push(key=i, value=value[0][0][i])
 
+    def check_channel_exists(slack_channel: str) -> bool:
+        """
+        This function checks if the specified slack channel exists.
+
+        Parameters:
+            slack_channel (str): The name of the slack channel to be checked.
+
+        Returns:
+            bool: True if the specified slack channel exists, False otherwise.
+        """
+        try:
+            client = WebClient(token=env_vars["slack_token"])
+            response = client.conversations_list(types="public_channel,private_channel")
+            if response["ok"]:
+                print(f"List of slack channels: {response['channels']}")
+                for channel in response["channels"]:
+                    if channel["name"] == slack_channel:
+                        print(f"Fround Slack channel - {channel['name']}")
+                        return True
+            return False
+        except SlackApiError as e:
+            raise AirflowException(
+                f"Failed to check if Slack channel {slack_channel} exists: {e.response['error']}"
+            )
+
+    def get_bot_user_name() -> str:
+        """
+        This function retrieves the bot user name associated with the Slack token.
+
+        Returns:
+            str: The bot user name.
+        """
+        client = WebClient(token=env_vars["slack_token"])
+        try:
+            response = client.auth_test()
+            if response["ok"]:
+                print(f"Bot user {response['user']}")
+                return response["user"]
+        except SlackApiError as e:
+            raise AirflowException(
+                f"Failed to retrieve bot user name: {e.response['error']}"
+            )
+        return ""
+
+    def send_slack_notification(context) -> bool:
+        """
+        This function sends a slack notification to the specified slack channel.
+
+        Parameters:
+            context (dict): A dictionary containing the following keys:
+                - dag_run (Airflow DAG run)
+                - task_instance (Airflow task instance)
+                - execution_date (str)
+                - slack_channel (str)
+
+        """
+        task_id = context["task_instance"].task_id
+        execution_date = context["execution_date"]
+        slack_message = f"Task {task_id} failed at {execution_date} <!here>"
+
+        slack_token = env_vars["slack_token"]
+        slack_channel = env_vars["slack_channel"]
+        bot_user_name = get_bot_user_name()
+        client = WebClient(token=slack_token)
+
+        # Check if the specified slack channel exists. If not, create it.
+        print(f"Checking if Slack channel {slack_channel} exists...")
+        """
+        if not check_channel_exists(slack_channel):
+            try:
+                response = client.conversations_create(name=slack_channel)
+                if response['ok']:
+                    channel_id = response['channel']['id']
+                    print(f"New channel created. Channel ID: {channel_id}")
+                else:
+                    print(f"Failed to create channel: {response['error']}")
+            except SlackApiError as e:
+                print(f"Error creating channel: {e.response['error']}")
+
+        """
+
+        # Try to send the message to the specified slack channel.
+
+        try:
+            response = client.chat_postMessage(
+                channel=slack_channel, text=slack_message, username=bot_user_name
+            )
+            if not response["ok"]:
+                raise AirflowException(
+                    f"Failed to send Slack notification: {response['error']}"
+                )
+        except SlackApiError as e:
+            raise AirflowException(
+                f"Failed to send Slack notification: {e.response['error']}"
+            )
+
     # dag creation
     dag = DAG(
         dag_id=dag_id,
@@ -330,6 +429,8 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 python_callable=parse_xcoms,
                 op_args=[task["upstream"]],
                 dag=dag,
+                on_failure_callback=send_slack_notification,
+                provide_context=True,
             )
             kubernetes_tasks[task["task_id"]] = service_task
 
@@ -356,6 +457,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 arguments=arguments,
                 dag=dag,
                 do_xcom_push=is_xcom_push_task(task),
+                on_failure_callback=send_slack_notification,
             )
             kubernetes_tasks[task["task_id"]] = kubernetes_task
 
