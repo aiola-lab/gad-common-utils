@@ -297,7 +297,9 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                     if channel["name"] == slack_channel:
                         print(f"Fround Slack channel - {channel['name']}")
                         return True
+
             return False
+
         except SlackApiError as e:
             raise AirflowException(
                 f"Failed to check if Slack channel {slack_channel} exists: {e.response['error']}"
@@ -336,7 +338,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         """
         task_id = context["task_instance"].task_id
         execution_date = context["execution_date"]
-        slack_message = f"Task {task_id} failed at {execution_date} <!here>"
+        slack_message = f"Task {task_id} failed at {execution_date}"  # <!here>
 
         slack_token = env_vars["slack_token"]
         slack_channel = env_vars["slack_channel"]
@@ -345,19 +347,24 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
 
         # Check if the specified slack channel exists. If not, create it.
         print(f"Checking if Slack channel {slack_channel} exists...")
-        """
+
         if not check_channel_exists(slack_channel):
             try:
                 response = client.conversations_create(name=slack_channel)
-                if response['ok']:
-                    channel_id = response['channel']['id']
+
+                if response["ok"]:
+                    channel_id = response["channel"]["id"]
                     print(f"New channel created. Channel ID: {channel_id}")
+
                 else:
                     print(f"Failed to create channel: {response['error']}")
-            except SlackApiError as e:
-                print(f"Error creating channel: {e.response['error']}")
 
-        """
+            except SlackApiError as e:
+                if str(e.response["error"]) == "name_taken":
+                    print(f"Channel '{slack_channel}' already exists.")
+
+                else:
+                    print(f"Error creating channel: {e.response['error']}")
 
         # Try to send the message to the specified slack channel.
 
