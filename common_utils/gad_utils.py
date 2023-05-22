@@ -2,14 +2,17 @@ import json
 import os
 from datetime import timedelta
 
-from airflow import DAG
+import requests
+from airflow import DAG, settings
 from airflow.contrib.operators.kubernetes_pod_operator import KubernetesPodOperator
 from airflow.exceptions import AirflowException
+from airflow.models import TaskInstance
 from airflow.operators.python_operator import PythonOperator
 from airflow.utils.dates import days_ago
 from kubernetes.client import models as k8s
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from sqlalchemy import func
 
 
 def return_dag_ingrediants(project):
@@ -289,7 +292,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             bool: True if the specified slack channel exists, False otherwise.
         """
         try:
-            client = WebClient(token=env_vars["slack_token"])
+            client = WebClient(token=os.getenv("api_token"))
             response = client.conversations_list(types="public_channel,private_channel")
             if response["ok"]:
                 print(f"List of slack channels: {response['channels']}")
@@ -312,7 +315,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         Returns:
             str: The bot user name.
         """
-        client = WebClient(token=env_vars["slack_token"])
+        client = WebClient(token=os.getenv("api_token"))
         try:
             response = client.auth_test()
             if response["ok"]:
@@ -323,6 +326,62 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 f"Failed to retrieve bot user name: {e.response['error']}"
             )
         return ""
+
+    def build_slack_message(context):
+        task_instance = context["task_instance"]
+        dag_id = task_instance.dag_id
+        task_id = task_instance.task_id
+        dag_execution_date = context["execution_date"]
+        exception = context["exception"]
+
+        # Retrieve EC2 machine name
+        try:
+            ec2_machine_name = requests.get(
+                "http://169.254.169.254/latest/meta-data/hostname"
+            ).text
+        except requests.RequestException as e:
+            ec2_machine_name = "Unknown"
+
+        # Retrieve logs
+        logs = task_instance.log
+
+        # Retrieve number of incomplete tasks
+        session = settings.Session()
+        num_incomplete = (
+            session.query(func.count())
+            .filter(
+                TaskInstance.dag_id == dag_id,
+                TaskInstance.execution_date == dag_execution_date,
+                TaskInstance.state != "success",
+            )
+            .scalar()
+        )
+        session.close()
+
+        # Change local host to this machine ip
+        my_ip = "54.170.202.148"
+        task_log_url = str(task_instance.log_url).replace("localhost", my_ip)
+
+        # Access the KubernetesPodOperator logs
+        # logs_pod = context['ti'].xcom_pull(task_ids=task_id, key='logs')
+        logs_pod = task_instance.xcom_pull(
+            task_ids="task_id"
+        )  # This is not working sine the xcom is empty, need to pass the pod stdout to the xcom
+
+        slack_message = f"""
+        Name of EC2 Machine: {ec2_machine_name} 
+        Name of DAG: {dag_id}
+        Name of Task: {task_id}
+        Exception of DAG: {logs}
+        Pod Logs: {logs_pod}
+        Link to Log: {task_log_url}
+        Start Time of Running DAG: {dag_execution_date}
+        Start Time of Running Task: {task_instance.start_date}
+        "Numer of Tries of Task: {task_instance.try_number}
+        Number of Incomplete Tasks: {num_incomplete}
+        """
+
+        return slack_message
 
     def send_slack_notification(context) -> bool:
         """
@@ -338,9 +397,10 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         """
         task_id = context["task_instance"].task_id
         execution_date = context["execution_date"]
-        slack_message = f"Task {task_id} failed at {execution_date}"  # <!here>
 
-        slack_token = env_vars["slack_token"]
+        slack_message = build_slack_message(context)
+
+        slack_token = os.getenv("api_token")
         slack_channel = env_vars["slack_channel"]
         bot_user_name = get_bot_user_name()
         client = WebClient(token=slack_token)
