@@ -291,6 +291,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         Returns:
             bool: True if the specified slack channel exists, False otherwise.
         """
+        # TODO: In case channel doesnt exist, need to install the Slack app
         try:
             client = WebClient(token=os.getenv("api_token"))
             response = client.conversations_list(types="public_channel,private_channel")
@@ -308,14 +309,13 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 f"Failed to check if Slack channel {slack_channel} exists: {e.response['error']}"
             )
 
-    def get_bot_user_name() -> str:
+    def get_bot_user_name(client) -> str:
         """
         This function retrieves the bot user name associated with the Slack token.
 
         Returns:
             str: The bot user name.
         """
-        client = WebClient(token=os.getenv("api_token"))
         try:
             response = client.auth_test()
             if response["ok"]:
@@ -342,6 +342,9 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         except requests.RequestException as e:
             ec2_machine_name = "Unknown"
 
+        # Retrieve EC2 machine IP address
+        my_ip = requests.get("https://checkip.amazonaws.com").text.strip()
+
         # Retrieve logs
         logs = task_instance.log
 
@@ -359,21 +362,15 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         session.close()
 
         # Change local host to this machine ip
-        my_ip = "54.170.202.148"
         task_log_url = str(task_instance.log_url).replace("localhost", my_ip)
 
-        # Access the KubernetesPodOperator logs
-        # logs_pod = context['ti'].xcom_pull(task_ids=task_id, key='logs')
-        logs_pod = task_instance.xcom_pull(
-            task_ids="task_id"
-        )  # This is not working sine the xcom is empty, need to pass the pod stdout to the xcom
+        # TODO: Add abillity to send the pod stdout to slack
 
         slack_message = f"""
         Name of EC2 Machine: {ec2_machine_name} 
         Name of DAG: {dag_id}
         Name of Task: {task_id}
         Exception of DAG: {logs}
-        Pod Logs: {logs_pod}
         Link to Log: {task_log_url}
         Start Time of Running DAG: {dag_execution_date}
         Start Time of Running Task: {task_instance.start_date}
@@ -399,11 +396,12 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         execution_date = context["execution_date"]
 
         slack_message = build_slack_message(context)
-
-        slack_token = os.getenv("api_token")
-        slack_channel = env_vars["slack_channel"]
-        bot_user_name = get_bot_user_name()
+        slack_token = os.getenv("api_token")  # From gad-secrets.yaml
+        slack_channel = env_vars["slack_channel"]  # From config.json
         client = WebClient(token=slack_token)
+
+        # Get the name of the slack bot
+        bot_user_name = get_bot_user_name(client)
 
         # Check if the specified slack channel exists. If not, create it.
         print(f"Checking if Slack channel {slack_channel} exists...")
