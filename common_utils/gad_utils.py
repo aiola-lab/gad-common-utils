@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from datetime import timedelta
 
 import requests
@@ -281,7 +282,58 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             print("xcom push", "key", i, "val", value[0][0][i])
             task_instance.xcom_push(key=i, value=value[0][0][i])
 
-    def check_channel_exists(slack_channel: str) -> bool:
+    def list_all_conversations(client):
+        """
+        Retrieves a list of all conversations (channels) from Slack using the provided client.
+
+        Args:
+            client (SlackClient): The Slack client object.
+
+        Returns:
+            list: A list of conversation objects.
+
+        Raises:
+            SlackApiError: If an error occurs while retrieving conversations from Slack.
+        """
+        all_conversations = []
+        max_retries = 5
+        retry_delay = 2
+        retry_counter = 0
+
+        while retry_counter < max_retries:
+            try:
+                response = client.conversations_list(
+                    types="private_channel,public_channel,mpim,im"
+                )
+                all_conversations.extend(response["channels"])
+
+                if (
+                    "response_metadata" in response
+                    and "next_cursor" in response["response_metadata"]
+                ):
+                    next_cursor = response["response_metadata"]["next_cursor"]
+                    response = client.conversations_list(
+                        cursor=next_cursor,
+                        types="private_channel,public_channel,mpim,im",
+                    )
+                else:
+                    break
+
+            except SlackApiError as e:
+                if e.response["error"] == "ratelimited":
+                    # Retry after the specified duration
+                    retry_after = int(e.response.headers["Retry-After"])
+                    time.sleep(retry_after)
+                else:
+                    print(f"Failed to retrieve conversations: {e}")
+                    break
+
+            retry_counter += 1
+            time.sleep(retry_delay * (2**retry_counter))
+
+        return all_conversations
+
+    def check_channel_exists(slack_channel: str, client) -> bool:
         """
         This function checks if the specified slack channel exists.
 
@@ -293,14 +345,15 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         """
         # TODO: In case channel doesnt exist, need to install the Slack app
         try:
-            client = WebClient(token=os.getenv("api_token"))
-            response = client.conversations_list(types="public_channel,private_channel")
-            if response["ok"]:
-                print(f"List of slack channels: {response['channels']}")
-                for channel in response["channels"]:
-                    if channel["name"] == slack_channel:
-                        print(f"Fround Slack channel - {channel['name']}")
-                        return True
+            all_channels = list_all_conversations(client)
+            channels_names = [
+                (channel["name"], channel["id"]) for channel in all_channels
+            ]
+            print(f"List of slack channels: {channels_names}")
+            for channel in channels_names:
+                if channel[0] == slack_channel:
+                    print(f"Found Slack channel - name: {channel[0]}, id: {channel[1]}")
+                    return True
 
             return False
 
@@ -406,13 +459,23 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         # Check if the specified slack channel exists. If not, create it.
         print(f"Checking if Slack channel {slack_channel} exists...")
 
-        if not check_channel_exists(slack_channel):
+        if not check_channel_exists(slack_channel, client):
             try:
                 response = client.conversations_create(name=slack_channel)
 
                 if response["ok"]:
                     channel_id = response["channel"]["id"]
-                    print(f"New channel created. Channel ID: {channel_id}")
+                    print(
+                        f"New channel created. name: {slack_channel} id: {channel_id}"
+                    )
+                    print(f"Installing Slack app in channel '{slack_channel}'...")
+                    response = client.conversations_invite(channel=channel_id)
+                    if response["ok"]:
+                        print(f"Slack app installed in channel '{slack_channel}'")
+                    else:
+                        print(
+                            f"Failed to install Slack app in channel: {response['error']}"
+                        )
 
                 else:
                     print(f"Failed to create channel: {response['error']}")
