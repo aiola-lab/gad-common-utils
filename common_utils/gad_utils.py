@@ -282,12 +282,21 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         schedule_interval=schedule_interval,
         max_active_runs=1,
         concurrency=10,
+        params={"FROM_TIMESTAMP": "",
+                "TO_TIMESTAMP": "",
+                "FULL_LOAD": "False",
+                "FULL_LOAD_FROM_TIMESTAMP": "".
+                "INITIAL_LOAD_FROM_TIMESTAMP_MONTHS_BACK": "6",
+                "EVENTS_DISTRIBUTION_INTERVAL_IN_SECONDS": "60",
+                "CLOUDWATCH_CHUNK_SIZE": "10000",
+                "CLOUDWATCH_CHUNK_SIZE_BUFFER": "1000",
+                "ATHENA_WORKGROUP": "primary",
+                "DESTINATION_DATABASE_NAME"
+                },
     )
 
     configs = return_configs()
-    # env_vars = [{"name": "yaniv", "value": "abc"}]
-    env_vars = [{"name" : "yaniv", "value" : "{{ dag_run.conf['yaniv'] }}"}]
-    # print(f"%%%%%%%%%%%%% {env_vars}")
+    env_vars = [{"name" : "args", "value" : "{{ dag_run.conf }}"}]
 
     """
     This code is a loop that iterates over a list of tasks and creates a KubernetesPodOperator object for each task.
