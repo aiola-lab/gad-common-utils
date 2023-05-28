@@ -285,7 +285,9 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
     )
 
     configs = return_configs()
-    env_vars = configs.get("env_vars")
+    # env_vars = [{"name": "yaniv", "value": "abc"}]
+    env_vars = [{"name" : "yaniv", "value" : "{{ dag_run.conf['yaniv'] }}"}]
+    # print(f"%%%%%%%%%%%%% {env_vars}")
 
     """
     This code is a loop that iterates over a list of tasks and creates a KubernetesPodOperator object for each task.
