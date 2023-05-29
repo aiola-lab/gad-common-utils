@@ -215,7 +215,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 dbt_vars.update(xcom_val)
                 dbt_all_args = dbt_default_args_and_models + [
                     "--vars",
-                    json.dumps(dbt_vars),
+                    "{{ dag_run.conf }}",
                 ]
             elif bool(xcom_val):
                 dbt_all_args = dbt_default_args_and_models + [
@@ -241,6 +241,22 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                         list_args.append(python_args[key])
             return list_args
 
+    def return_configs() -> dict:
+        """
+        Returns the dictionary of configurations read from a JSON file.
+
+        Parameters:
+        None
+
+        Returns:
+        dict: A dictionary containing the configurations read from the JSON file located in the CONFIG_DIR directory.
+
+        """
+
+        with open(f"{paths['CONFIG_DIR']}/config.json", "r") as f:
+            j = f.read()
+        return json.loads(j)
+
     def parse_xcoms(task_id, **kwargs):
         """
         This function extracts XCom data from a specified task instance and pushes the data to XCom with individual keys.
@@ -259,6 +275,9 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             print("xcom push", "key", i, "val", value[0][0][i])
             task_instance.xcom_push(key=i, value=value[0][0][i])
 
+    def digest_args(x):
+        print(x)
+    
     # dag creation
     dag = DAG(
         dag_id=dag_id,
@@ -277,7 +296,8 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 "CLOUDWATCH_CHUNK_SIZE_BUFFER": 1000,
                 },
     )
-
+    
+    configs = return_configs()
     # env_vars = [{"name" : "default_args", "value" : "{{ params }}"}]
     env_vars = [{"name" : "args", "value" : "{{ dag_run.conf }}"}]
 
@@ -287,7 +307,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
     return_image_name() function is used to get the image name based on the task type.
     The KubernetesPodOperator object is then created using these variables and appended to a dictionary named kubernetes_tasks with the task ID as the key.
     """
-
+    
     # Define an empty list to store new tasks
     new_tasks_list = []
 
@@ -300,7 +320,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 previous_task_id = task["task_id"]
                 service_task = {
                     "task_id": f"{previous_task_id}_service_task",
-                    "service": True,
+                    "task_type": "service",
                     "upstream": [previous_task_id],
                 }
                 new_tasks_list.append(service_task)
@@ -317,7 +337,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
     # Iterate through each task in the new list and create a KubernetesPodOperator or PythonOperator task based on its properties
     for task in new_tasks_list:
         # If the task is a service task, create a PythonOperator with parse_xcoms function as its callable
-        if "service" in task.keys():
+        if task.get("task_type") == "service":
             service_task = PythonOperator(
                 task_id=task["task_id"],
                 python_callable=parse_xcoms,
@@ -325,7 +345,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 dag=dag,
             )
             kubernetes_tasks[task["task_id"]] = service_task
-
+        
         # If the task is not a service task, create a KubernetesPodOperator
         else:
             cmds = return_cmds(task)
@@ -356,13 +376,24 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
     # each task in tasks contains a value in the 'upstream' key that tells what is the pervious task (or tasks).
     # the kubernates operator created gets the dependancies and is configured to use them with the set_upstream setting.
 
+    tasks_without_upstream = []
+    
     for task in new_tasks_list:
         if task["upstream"] is None or task["upstream"] == "" or task["upstream"] == []:
+            tasks_without_upstream.append(kubernetes_tasks[task["task_id"]])
             pass
         else:
             dependancies = []
             for t in task["upstream"]:
                 dependancies.append(kubernetes_tasks[t])
             kubernetes_tasks[task["task_id"]].set_upstream(dependancies)
+     
+    digest_args_task = PythonOperator(
+        task_id="digest_args_task",
+        python_callable=digest_args,
+        op_args=["yyy"],
+        dag=dag,
+    ).set_downstream(tasks_without_upstream)
+    
 
     return dag
