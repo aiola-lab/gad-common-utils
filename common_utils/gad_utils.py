@@ -1,5 +1,6 @@
 import json
 import os
+import ast
 from datetime import timedelta
 
 from airflow import DAG
@@ -228,10 +229,10 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             return dbt_all_args
 
         elif task_dict["task_type"] == "python":
-            if configs.get("python_args"):
-                python_args = configs.get("python_args")
-            else:
-                python_args = {}
+            # if configs.get("python_args"):
+            #     python_args = configs.get("python_args")
+            # else:
+            python_args = {}
             python_args.update(xcom_val)
             list_args = []
             if python_args:
@@ -275,9 +276,32 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             print("xcom push", "key", i, "val", value[0][0][i])
             task_instance.xcom_push(key=i, value=value[0][0][i])
 
-    def digest_args(x):
-        print(x)
-    
+    def digest_args(given_args, default_args, **kwargs):
+        print(f"given_args: {given_args}")
+        print(f"default_args: {default_args}")
+        
+        given_args_dict = ast.literal_eval(given_args)
+        default_args_dict = ast.literal_eval(default_args)
+        
+        args_to_use = {}
+        if given_args_dict:
+            print("using given args")
+            args_to_use = given_args_dict
+        else:
+            print("using default args")
+            args_to_use = default_args_dict
+            
+        print(f"args_to_use: {args_to_use}")
+        
+        python_env_vars = []
+        dbt_vars = ""
+        for arg in args_to_use:
+            python_env_vars.append({"name": arg, "value": args_to_use[arg]})
+            dbt_vars += f"{arg}: {args_to_use[arg]},"
+        
+        kwargs["ti"].xcom_push(key="python_env_vars", value=python_env_vars)
+        kwargs["ti"].xcom_push(key="dbt_vars", value=dbt_vars)
+
     # dag creation
     dag = DAG(
         dag_id=dag_id,
@@ -391,7 +415,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
     digest_args_task = PythonOperator(
         task_id="digest_args_task",
         python_callable=digest_args,
-        op_args=["yyy"],
+        op_kwargs={"given_args": "{{ dag_run.conf }}", "default_args": "{{ params }}"},
         dag=dag,
     ).set_downstream(tasks_without_upstream)
     
