@@ -241,22 +241,6 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                         list_args.append(python_args[key])
             return list_args
 
-    def return_configs() -> dict:
-        """
-        Returns the dictionary of configurations read from a JSON file.
-
-        Parameters:
-        None
-
-        Returns:
-        dict: A dictionary containing the configurations read from the JSON file located in the CONFIG_DIR directory.
-
-        """
-
-        with open(f"{paths['CONFIG_DIR']}/config.json", "r") as f:
-            j = f.read()
-        return json.loads(j)
-
     def parse_xcoms(task_id, **kwargs):
         """
         This function extracts XCom data from a specified task instance and pushes the data to XCom with individual keys.
@@ -284,25 +268,23 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         concurrency=10,
         params={"FROM_TIMESTAMP": "",
                 "TO_TIMESTAMP": "",
-                "FULL_LOAD": "False",
-                "FULL_LOAD_FROM_TIMESTAMP": "".
-                "INITIAL_LOAD_FROM_TIMESTAMP_MONTHS_BACK": "6",
-                "EVENTS_DISTRIBUTION_INTERVAL_IN_SECONDS": "60",
-                "CLOUDWATCH_CHUNK_SIZE": "10000",
-                "CLOUDWATCH_CHUNK_SIZE_BUFFER": "1000",
+                "FULL_LOAD": False,
+                "FULL_LOAD_FROM_TIMESTAMP": "",
+                "FULL_LOAD_FROM_TIMESTAMP_MONTHS_BACK": 3,
                 "ATHENA_WORKGROUP": "primary",
-                "DESTINATION_DATABASE_NAME"
+                "EVENTS_DISTRIBUTION_INTERVAL_IN_SECONDS": 60,
+                "CLOUDWATCH_CHUNK_SIZE": 10000,
+                "CLOUDWATCH_CHUNK_SIZE_BUFFER": 1000,
                 },
     )
 
-    configs = return_configs()
+    # env_vars = [{"name" : "default_args", "value" : "{{ params }}"}]
     env_vars = [{"name" : "args", "value" : "{{ dag_run.conf }}"}]
 
     """
     This code is a loop that iterates over a list of tasks and creates a KubernetesPodOperator object for each task.
     return_command_args() function is used to obtain the command arguments for the task.
     return_image_name() function is used to get the image name based on the task type.
-    return_configs() function is used to get environment variables.
     The KubernetesPodOperator object is then created using these variables and appended to a dictionary named kubernetes_tasks with the task ID as the key.
     """
 
