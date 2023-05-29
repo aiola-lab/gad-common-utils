@@ -445,11 +445,15 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 - slack_channel (str)
 
         """
+
+        slack_token = os.getenv("api_token")  # From gad-secrets.yaml
+        if slack_token is None:
+            print("Missing Slack API token.")
+            return False
+
         task_id = context["task_instance"].task_id
         execution_date = context["execution_date"]
-
         slack_message = build_slack_message(context)
-        slack_token = os.getenv("api_token")  # From gad-secrets.yaml
         slack_channel = env_vars["slack_channel"]  # From config.json
         client = WebClient(token=slack_token)
 
