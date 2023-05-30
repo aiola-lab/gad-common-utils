@@ -209,30 +209,19 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 paths["DBT_OUTPUT_DIR"],
             ]
 
-            dbt_default_args_and_models = task_dict["dbt_models"] + dbt_default_args
-
-            dbt_vars = configs.get("dbt_vars")
-            if dbt_vars:
-                dbt_vars.update(xcom_val)
-                dbt_all_args = dbt_default_args_and_models + [
-                    "--vars",
-                    "{{ dag_run.conf }}",
-                ]
-            elif bool(xcom_val):
-                dbt_all_args = dbt_default_args_and_models + [
-                    "--vars",
-                    json.dumps(xcom_val),
-                ]
-            else:
-                dbt_all_args = dbt_default_args_and_models
+            # .update(xcom_val) 
+            dbt_vars = "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='dbt_vars') }}".replace("[", "").replace("]", "")
+                                                                                                                                                      
+            
+            dbt_all_args = task_dict["dbt_models"] + dbt_default_args + ["--vars", dbt_vars]
 
             return dbt_all_args
 
         elif task_dict["task_type"] == "python":
-            # if configs.get("python_args"):
-            #     python_args = configs.get("python_args")
-            # else:
-            python_args = {}
+            if configs.get("python_args"):
+                python_args = configs.get("python_args")
+            else:
+                python_args = {}
             python_args.update(xcom_val)
             list_args = []
             if python_args:
@@ -293,14 +282,16 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             
         print(f"args_to_use: {args_to_use}")
         
+        dbt_vars = "{" + ", ".join([f"{k}: {v}" for k, v in args_to_use.items()]) + "}"
+        
         python_env_vars = []
-        dbt_vars = ""
         for arg in args_to_use:
             python_env_vars.append({"name": arg, "value": args_to_use[arg]})
-            dbt_vars += f"{arg}: {args_to_use[arg]},"
         
         kwargs["ti"].xcom_push(key="python_env_vars", value=python_env_vars)
         kwargs["ti"].xcom_push(key="dbt_vars", value=dbt_vars)
+        
+        print(f'^^^^^^^^^ {kwargs["ti"].xcom_pull(task_ids=["digest_args_task"], key="dbt_vars")[0]}')
 
     # dag creation
     dag = DAG(
