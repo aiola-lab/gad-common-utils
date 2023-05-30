@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import requests
 from airflow import DAG, settings
@@ -10,6 +10,7 @@ from airflow.exceptions import AirflowException
 from airflow.models import TaskInstance
 from airflow.operators.python_operator import PythonOperator
 from airflow.utils.dates import days_ago
+from kubernetes import client, config
 from kubernetes.client import models as k8s
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -282,6 +283,25 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             print("xcom push", "key", i, "val", value[0][0][i])
             task_instance.xcom_push(key=i, value=value[0][0][i])
 
+    def get_env_prefix_from_configmap(namespace, configmap_name):
+        # Load the in-cluster Kubernetes configuration
+        config.load_incluster_config()
+
+        # Create an instance of the Kubernetes API client
+        v1 = client.CoreV1Api()
+
+        try:
+            # Retrieve the ConfigMap
+            configmap = v1.read_namespaced_config_map(configmap_name, namespace)
+
+            # Access the 'ENV_PREFIX' value from the ConfigMap
+            env_prefix = configmap.data["ENV_PREFIX"]
+
+            return env_prefix
+        except client.exceptions.ApiException as e:
+            print(f"Exception when calling CoreV1Api->read_namespaced_config_map: {e}")
+            return None
+
     def list_all_conversations(client):
         """
         Retrieves a list of all conversations (channels) from Slack using the provided client.
@@ -381,10 +401,11 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         return ""
 
     def build_slack_message(context):
+        print("Strting to build Slack message")
         task_instance = context["task_instance"]
         dag_id = task_instance.dag_id
         task_id = task_instance.task_id
-        dag_execution_date = context["execution_date"]
+        dag_execution_date = context["dag_run"].logical_date
         exception = context["exception"]
 
         # Retrieve EC2 machine name
@@ -445,16 +466,23 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 - slack_channel (str)
 
         """
-
-        slack_token = os.getenv("api_token")  # From gad-secrets.yaml
+        slack_token = os.environ.get("api_token")
         if slack_token is None:
             print("Missing Slack API token.")
             return False
+        else:
+            print("Slack API token exists, getting to business")
 
-        task_id = context["task_instance"].task_id
-        execution_date = context["execution_date"]
+        slack_channel = (
+            os.getenv("ENV_PREFIX") + "_" + os.getenv("REGION") + "_gad_alerts"
+        )
+        print(f"Slack channel: {slack_channel}")
+        user_id = os.environ.get("user_id")
+
+        # slack_channel = get_env_prefix_from_configmap('default','gad-configmap') + "_alerts"
+
         slack_message = build_slack_message(context)
-        slack_channel = env_vars["slack_channel"]  # From config.json
+        # slack_channel = os.getenv("ENV_PREFIX") + "_alerts"
         client = WebClient(token=slack_token)
 
         # Get the name of the slack bot
@@ -473,12 +501,16 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                         f"New channel created. name: {slack_channel} id: {channel_id}"
                     )
                     print(f"Installing Slack app in channel '{slack_channel}'...")
-                    response = client.conversations_invite(channel=channel_id)
+                    response = client.conversations_invite(
+                        channel=channel_id, users=user_id
+                    )
                     if response["ok"]:
-                        print(f"Slack app installed in channel '{slack_channel}'")
+                        print(
+                            f"Succeeded in inviting user {user_id} to channel {slack_channel}"
+                        )
                     else:
                         print(
-                            f"Failed to install Slack app in channel: {response['error']}"
+                            f"Failed in inviting user {user_id} to channel {slack_channel}"
                         )
 
                 else:
