@@ -15,6 +15,7 @@ def return_dag_ingrediants(content_path, project):
     for the specified project.
 
     Parameters:
+        content_path (str): The path of the content we want to run via DAG.
         project (str): The name of the project for which to return the DAG ingredients.
 
     Returns:
@@ -73,7 +74,13 @@ def return_dag_ingrediants(content_path, project):
     return paths, default_args, envFromSource, volumes, volumes_mounts
 
 
-def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: list, content_path: str = 'gad-deliveries'):
+def generate_airflow_dag(
+    project: str,
+    dag_id: str,
+    schedule_interval,
+    tasks: list,
+    content_path: str = "gad-deliveries",
+):
     """
     Creates a DAG using the specified parameters.
 
@@ -82,14 +89,14 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         dag_id (str): The ID of the DAG.
         schedule_interval (str): The schedule interval for the DAG.
         tasks (list): A list of dictionaries containing information about each task.
+        content_path (str): The path of the content we want to run via DAG. by default it would get "gad-deliveries" as its the local content.
 
     Returns:
         dag (DAG): A DAG object.
     """
 
     paths, default_args, envConfigMap, volumes, volumes_mounts = return_dag_ingrediants(
-        content_path,
-        project
+        content_path, project
     )
 
     def return_image_name(task_type):
