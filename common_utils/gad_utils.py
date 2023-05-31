@@ -172,7 +172,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         elif task_dict["task_type"] == "python":
             return ["python", f"{paths['PYTHON_DIR']}/{task_dict['executable']}.py"]
 
-    def return_command_args(task_dict: dict, configs: dict) -> list:
+    def return_command_args(task_dict: dict) -> list:
         """Returns a list of command-line arguments based on task_dict and configs.
 
         Args:
@@ -180,12 +180,6 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 The dictionary must have 'task_type' key with value 'dbt' or 'python'.
                 If 'task_type' is 'dbt', then the dictionary must have 'dbt_models' key
                 with a list of strings containing the names of dbt models to be executed.
-
-        configs: A dictionary containing configuration values for the task.
-                If the task is of type 'dbt', then the dictionary can have 'dbt_vars' key
-                with a string value containing the variable values to be passed to dbt.
-                If the task is of type 'python', then the dictionary can have 'python_args'
-                key with a list of strings containing command-line arguments for the python script.
 
         Returns:
         A list of command-line arguments based on the task and configuration values.
@@ -209,43 +203,33 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 paths["DBT_OUTPUT_DIR"],
             ]
 
-            # .update(xcom_val) 
-            dbt_vars = "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='dbt_vars') }}".replace("[", "").replace("]", "")
+            dbt_vars = "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='dbt_vars') }}"[1:-1]
                                                                                                                                                       
-            
-            dbt_all_args = task_dict["dbt_models"] + dbt_default_args + ["--vars", dbt_vars]
+            dbt_all_args = task_dict["dbt_models"] + dbt_default_args + ["--vars", dbt_vars] + ["--vars", json.dumps(xcom_val)]
 
             return dbt_all_args
 
         elif task_dict["task_type"] == "python":
-            if configs.get("python_args"):
-                python_args = configs.get("python_args")
-            else:
-                python_args = {}
-            python_args.update(xcom_val)
             list_args = []
-            if python_args:
-                for key in python_args:
-                    list_args.append(f"--{key}")
-                    if python_args[key]:
-                        list_args.append(python_args[key])
+            
+            for key in xcom_val:
+                list_args.append(f"--{key}")
+                    
             return list_args
+        
+    def return_env_vars(task_dict: dict) -> list:
+        """Returns a list of environment variables based on task_dict (currently only supports python tasks).
+        The environment variables are taken from the 'python_env_vars' key from XCOM.
 
-    def return_configs() -> dict:
-        """
-        Returns the dictionary of configurations read from a JSON file.
-
-        Parameters:
-        None
+        Args:
+        task_dict: A dictionary containing information about the task to be executed.
+                The dictionary must have 'task_type' key with value 'dbt' or 'python'.
 
         Returns:
-        dict: A dictionary containing the configurations read from the JSON file located in the CONFIG_DIR directory.
-
+            list: list of dictionaries containing environment variables in the format of {"name": "some_name", "value": "some_value"}
         """
-
-        with open(f"{paths['CONFIG_DIR']}/config.json", "r") as f:
-            j = f.read()
-        return json.loads(j)
+        if task_dict["task_type"] == "python":
+            return "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='python_env_vars') }}"[1:-1]
 
     def parse_xcoms(task_id, **kwargs):
         """
@@ -311,10 +295,6 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                 "CLOUDWATCH_CHUNK_SIZE_BUFFER": 1000,
                 },
     )
-    
-    configs = return_configs()
-    # env_vars = [{"name" : "default_args", "value" : "{{ params }}"}]
-    env_vars = [{"name" : "args", "value" : "{{ dag_run.conf }}"}]
 
     """
     This code is a loop that iterates over a list of tasks and creates a KubernetesPodOperator object for each task.
@@ -364,7 +344,8 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         # If the task is not a service task, create a KubernetesPodOperator
         else:
             cmds = return_cmds(task)
-            arguments = return_command_args(task, configs)
+            arguments = return_command_args(task)
+            env_vars = return_env_vars(task)
             image = return_image_name(task["task_type"])
 
             kubernetes_task = KubernetesPodOperator(
