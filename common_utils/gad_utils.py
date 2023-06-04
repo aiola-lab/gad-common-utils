@@ -180,7 +180,7 @@ def generate_airflow_dag(
         elif task_dict["task_type"] == "python":
             return ["python", f"{paths['PYTHON_DIR']}/{task_dict['executable']}.py"]
 
-    def return_command_args(task_dict: dict, configs: dict) -> list:
+    def return_command_args(task_dict: dict) -> list:
         """Returns a list of command-line arguments based on task_dict and configs.
 
         Args:
@@ -248,22 +248,6 @@ def generate_airflow_dag(
 
             return list_args
 
-    def return_configs() -> dict:
-        """
-        Returns the dictionary of configurations read from a JSON file.
-
-        Parameters:
-        None
-
-        Returns:
-        dict: A dictionary containing the configurations read from the JSON file located in the CONFIG_DIR directory.
-
-        """
-
-        with open(f"{paths['CONFIG_DIR']}/config.json", "r") as f:
-            j = f.read()
-        return json.loads(j)
-
     def parse_xcoms(task_id, **kwargs):
         """
         This function extracts XCom data from a specified task instance and pushes the data to XCom with individual keys.
@@ -305,10 +289,6 @@ def generate_airflow_dag(
         for arg in args_to_use:
             kwargs["ti"].xcom_push(key=arg, value=args_to_use[arg])
 
-        print(
-            f'^^^^^^^^^ {kwargs["ti"].xcom_pull(task_ids=["digest_args_task"], key="dbt_vars")[0]}'
-        )
-
     default_params = {
         "FROM_TIMESTAMP": "",
         "TO_TIMESTAMP": "",
@@ -330,9 +310,6 @@ def generate_airflow_dag(
         concurrency=10,
         params=default_params,
     )
-
-    configs = return_configs()
-    env_vars = configs.get("env_vars")
 
     """
     This code is a loop that iterates over a list of tasks and creates a KubernetesPodOperator object for each task.
@@ -383,13 +360,13 @@ def generate_airflow_dag(
         # If the task is not a service task, create a KubernetesPodOperator
         else:
             cmds = return_cmds(task)
-            arguments = return_command_args(task, configs)
+            arguments = return_command_args(task)
             image = return_image_name(task["task_type"])
 
             kubernetes_task = KubernetesPodOperator(
                 volumes=volumes,
                 volume_mounts=volumes_mounts,
-                env_vars=env_vars,
+                env_vars=[],
                 env_from=[envConfigMap],
                 namespace="default",
                 labels={"Task": task["task_type"]},
