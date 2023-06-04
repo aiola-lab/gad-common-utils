@@ -233,17 +233,19 @@ def generate_airflow_dag(
             return dbt_all_args
 
         elif task_dict["task_type"] == "python":
-            if configs.get("python_args"):
-                python_args = configs.get("python_args")
-            else:
-                python_args = {}
-            python_args.update(xcom_val)
             list_args = []
-            if python_args:
-                for key in python_args:
-                    list_args.append(f"--{key}")
-                    if python_args[key]:
-                        list_args.append(python_args[key])
+            for key in default_params:
+                list_args.append(f"--{key}")
+                list_args.append(
+                    (
+                        "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='"
+                        + key
+                        + "') }}"
+                    )
+                    .replace("[", "")
+                    .replace("]", "")
+                )
+
             return list_args
 
     def return_configs() -> dict:
@@ -298,17 +300,26 @@ def generate_airflow_dag(
         print(f"args_to_use: {args_to_use}")
 
         dbt_vars = "{" + ", ".join([f"{k}: {v}" for k, v in args_to_use.items()]) + "}"
-
-        python_env_vars = []
-        for arg in args_to_use:
-            python_env_vars.append({"name": arg, "value": args_to_use[arg]})
-
-        kwargs["ti"].xcom_push(key="python_env_vars", value=python_env_vars)
         kwargs["ti"].xcom_push(key="dbt_vars", value=dbt_vars)
+
+        for arg in args_to_use:
+            kwargs["ti"].xcom_push(key=arg, value=args_to_use[arg])
 
         print(
             f'^^^^^^^^^ {kwargs["ti"].xcom_pull(task_ids=["digest_args_task"], key="dbt_vars")[0]}'
         )
+
+    default_params = {
+        "FROM_TIMESTAMP": "",
+        "TO_TIMESTAMP": "",
+        "FULL_LOAD": False,
+        "FULL_LOAD_FROM_TIMESTAMP": "",
+        "FULL_LOAD_FROM_TIMESTAMP_MONTHS_BACK": 3,
+        "ATHENA_WORKGROUP": "primary",
+        "EVENTS_DISTRIBUTION_INTERVAL_IN_SECONDS": 60,
+        "CLOUDWATCH_CHUNK_SIZE": 10000,
+        "CLOUDWATCH_CHUNK_SIZE_BUFFER": 1000,
+    }
 
     # dag creation
     dag = DAG(
@@ -317,17 +328,7 @@ def generate_airflow_dag(
         schedule_interval=schedule_interval,
         max_active_runs=1,
         concurrency=10,
-        params={
-            "FROM_TIMESTAMP": "",
-            "TO_TIMESTAMP": "",
-            "FULL_LOAD": False,
-            "FULL_LOAD_FROM_TIMESTAMP": "",
-            "FULL_LOAD_FROM_TIMESTAMP_MONTHS_BACK": 3,
-            "ATHENA_WORKGROUP": "primary",
-            "EVENTS_DISTRIBUTION_INTERVAL_IN_SECONDS": 60,
-            "CLOUDWATCH_CHUNK_SIZE": 10000,
-            "CLOUDWATCH_CHUNK_SIZE_BUFFER": 1000,
-        },
+        params=default_params,
     )
 
     configs = return_configs()
