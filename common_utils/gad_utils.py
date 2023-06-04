@@ -206,16 +206,14 @@ def generate_airflow_dag(
             ]
 
             dbt_vars = (
-                "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='dbt_vars') }}"[
-                    1:-1
-                ]
+                "{{ti.xcom_pull(task_ids=['digest_args_task'], key='dbt_vars')}}"[1:-1]
             )
 
             dbt_all_args = (
                 task_dict["dbt_models"]
                 + dbt_default_args
                 + ["--vars", dbt_vars]
-                + ["--vars", json.dumps(xcom_val)]
+                # + ["--vars", json.dumps(xcom_val)]
             )
 
             return dbt_all_args
@@ -223,8 +221,28 @@ def generate_airflow_dag(
         elif task_dict["task_type"] == "python":
             list_args = []
 
+            for key in default_params:
+                list_args.append(f"--{key}")
+                list_args.append(
+                    (
+                        "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='"
+                        + key
+                        + "') }}"
+                    )[1:-1]
+                )
+
+            list_args = [
+                f"--{key}",
+                (
+                    "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='"
+                    + key
+                    + "') }}"
+                ),
+            ]
+
             for key in xcom_val:
                 list_args.append(f"--{key}")
+                list_args.append(xcom_val[key])
 
             return list_args
 
@@ -239,19 +257,25 @@ def generate_airflow_dag(
         Returns:
             list: A list of environment variables based on the task and configuration values.
         """
-        if task_dict["task_type"] == "python":
-            python_env_vars = []
-            for key in default_params:
-                python_env_vars.append(
-                    {
-                        "name": key,
-                        "value": "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='"
-                        + key
-                        + "') }}",
-                    }
-                )
+        py_all_args = []
+        # if task_dict["task_type"] == "python":
+        #     python_env_vars = []
+        #     # for key in default_params:
+        #     value = (
+        #         "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='dbt_vars') }}"[1:-1]
+        #     )
 
-            return python_env_vars
+        #     py_all_arg = ["--vars", value]
+
+        # python_env_vars.append(
+        #     {
+        #         "name": key,
+        #         "value": str(value)
+        #     }
+        # )
+
+        # return python_env_vars
+        return py_all_args
 
     def parse_xcoms(task_id, **kwargs):
         """
@@ -290,13 +314,9 @@ def generate_airflow_dag(
 
         dbt_vars = "{" + ", ".join([f"{k}: {v}" for k, v in args_to_use.items()]) + "}"
 
-        # python_env_vars = []
-        for arg in args_to_use:
-            kwargs["ti"].xcom_push(key=arg, value=args_to_use[arg])
+        # for arg in args_to_use:
+        #     kwargs["ti"].xcom_push(key=arg, value="{" + str(args_to_use[arg]) + "}")
 
-            # python_env_vars.append({"name": arg, "value": args_to_use[arg]})
-
-        # kwargs["ti"].xcom_push(key="python_env_vars", value=python_env_vars)
         kwargs["ti"].xcom_push(key="dbt_vars", value=dbt_vars)
 
         print(
@@ -306,7 +326,7 @@ def generate_airflow_dag(
     default_params = {
         "FROM_TIMESTAMP": "",
         "TO_TIMESTAMP": "",
-        "FULL_LOAD": False,
+        "FULL_LOAD": "False",
         "FULL_LOAD_FROM_TIMESTAMP": "",
         "FULL_LOAD_FROM_TIMESTAMP_MONTHS_BACK": 3,
         "ATHENA_WORKGROUP": "primary",
@@ -319,8 +339,20 @@ def generate_airflow_dag(
         schedule_interval=schedule_interval,
         max_active_runs=1,
         concurrency=10,
-        params=default_params,
+        params={
+            "FROM_TIMESTAMP": "",
+            "TO_TIMESTAMP": "",
+            "FULL_LOAD": False,
+            "FULL_LOAD_FROM_TIMESTAMP": "",
+            "FULL_LOAD_FROM_TIMESTAMP_MONTHS_BACK": 3,
+            "ATHENA_WORKGROUP": "primary",
+            "EVENTS_DISTRIBUTION_INTERVAL_IN_SECONDS": 60,
+            "CLOUDWATCH_CHUNK_SIZE": 10000,
+            "CLOUDWATCH_CHUNK_SIZE_BUFFER": 1000,
+        },
     )
+
+    env_vars = [{"name": "args", "value": "{{ dag_run.conf }}"}]
 
     """
     This code is a loop that iterates over a list of tasks and creates a KubernetesPodOperator object for each task.
@@ -371,7 +403,7 @@ def generate_airflow_dag(
         else:
             cmds = return_cmds(task)
             arguments = return_command_args(task)
-            env_vars = return_env_vars(task)
+            # env_vars = return_env_vars(task)
             image = return_image_name(task["task_type"])
 
             kubernetes_task = KubernetesPodOperator(
