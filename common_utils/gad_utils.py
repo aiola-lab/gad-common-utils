@@ -224,7 +224,10 @@ def generate_airflow_dag(
             )
 
             dbt_all_args = (
-                task_dict["dbt_models"] + dbt_default_args + ["--vars", dbt_vars]
+                task_dict["dbt_models"]
+                + dbt_default_args
+                + ["--vars", dbt_vars]
+                + ["--vars", json.dumps(xcom_val)]
             )
 
             return dbt_all_args
