@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 from datetime import timedelta
@@ -216,22 +217,15 @@ def generate_airflow_dag(
                 paths["DBT_OUTPUT_DIR"],
             ]
 
-            dbt_default_args_and_models = task_dict["dbt_models"] + dbt_default_args
+            dbt_vars = "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='dbt_vars') }}".replace(
+                "[", ""
+            ).replace(
+                "]", ""
+            )
 
-            dbt_vars = configs.get("dbt_vars")
-            if dbt_vars:
-                dbt_vars.update(xcom_val)
-                dbt_all_args = dbt_default_args_and_models + [
-                    "--vars",
-                    json.dumps(dbt_vars),
-                ]
-            elif bool(xcom_val):
-                dbt_all_args = dbt_default_args_and_models + [
-                    "--vars",
-                    json.dumps(xcom_val),
-                ]
-            else:
-                dbt_all_args = dbt_default_args_and_models
+            dbt_all_args = (
+                task_dict["dbt_models"] + dbt_default_args + ["--vars", dbt_vars]
+            )
 
             return dbt_all_args
 
@@ -283,6 +277,36 @@ def generate_airflow_dag(
             print("xcom push", "key", i, "val", value[0][0][i])
             task_instance.xcom_push(key=i, value=value[0][0][i])
 
+    def digest_args(given_args, default_args, **kwargs):
+        print(f"given_args: {given_args}")
+        print(f"default_args: {default_args}")
+
+        given_args_dict = ast.literal_eval(given_args)
+        default_args_dict = ast.literal_eval(default_args)
+
+        args_to_use = {}
+        if given_args_dict:
+            print("using given args")
+            args_to_use = given_args_dict
+        else:
+            print("using default args")
+            args_to_use = default_args_dict
+
+        print(f"args_to_use: {args_to_use}")
+
+        dbt_vars = "{" + ", ".join([f"{k}: {v}" for k, v in args_to_use.items()]) + "}"
+
+        python_env_vars = []
+        for arg in args_to_use:
+            python_env_vars.append({"name": arg, "value": args_to_use[arg]})
+
+        kwargs["ti"].xcom_push(key="python_env_vars", value=python_env_vars)
+        kwargs["ti"].xcom_push(key="dbt_vars", value=dbt_vars)
+
+        print(
+            f'^^^^^^^^^ {kwargs["ti"].xcom_pull(task_ids=["digest_args_task"], key="dbt_vars")[0]}'
+        )
+
     # dag creation
     dag = DAG(
         dag_id=dag_id,
@@ -290,6 +314,17 @@ def generate_airflow_dag(
         schedule_interval=schedule_interval,
         max_active_runs=1,
         concurrency=10,
+        params={
+            "FROM_TIMESTAMP": "",
+            "TO_TIMESTAMP": "",
+            "FULL_LOAD": False,
+            "FULL_LOAD_FROM_TIMESTAMP": "",
+            "FULL_LOAD_FROM_TIMESTAMP_MONTHS_BACK": 3,
+            "ATHENA_WORKGROUP": "primary",
+            "EVENTS_DISTRIBUTION_INTERVAL_IN_SECONDS": 60,
+            "CLOUDWATCH_CHUNK_SIZE": 10000,
+            "CLOUDWATCH_CHUNK_SIZE_BUFFER": 1000,
+        },
     )
 
     configs = return_configs()
@@ -371,13 +406,23 @@ def generate_airflow_dag(
     # each task in tasks contains a value in the 'upstream' key that tells what is the pervious task (or tasks).
     # the kubernates operator created gets the dependancies and is configured to use them with the set_upstream setting.
 
+    tasks_without_upstream = []
+
     for task in new_tasks_list:
         if task["upstream"] is None or task["upstream"] == "" or task["upstream"] == []:
+            tasks_without_upstream.append(kubernetes_tasks[task["task_id"]])
             pass
         else:
             dependancies = []
             for t in task["upstream"]:
                 dependancies.append(kubernetes_tasks[t])
             kubernetes_tasks[task["task_id"]].set_upstream(dependancies)
+
+    digest_args_task = PythonOperator(
+        task_id="digest_args_task",
+        python_callable=digest_args,
+        op_kwargs={"given_args": "{{ dag_run.conf }}", "default_args": "{{ params }}"},
+        dag=dag,
+    ).set_downstream(tasks_without_upstream)
 
     return dag
