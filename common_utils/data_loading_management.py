@@ -31,8 +31,8 @@ class dataLoadingManagement:
 
     def __init__(
         self,
-        from_timestamp: str,
-        to_timestamp: str,
+        from_timestamp: str = None,
+        to_timestamp: str = None,
         full_load: bool = False,
         full_load_from_timestamp: str = None,
         full_load_from_timestamp_months_back: int = 3,

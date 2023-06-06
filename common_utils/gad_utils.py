@@ -311,8 +311,11 @@ def generate_airflow_dag(
 
         # push each python arg to xcom
         for arg in args_to_use:
-            if args_to_use[arg]:
+            if args_to_use[arg] != "":
                 kwargs["ti"].xcom_push(key=arg, value=args_to_use[arg])
+
+    # use only the params that are not empty
+    dag_params = {k: v for k, v in dag_params.items() if v != ""}
 
     # dag creation
     dag = DAG(
