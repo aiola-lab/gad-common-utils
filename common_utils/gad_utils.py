@@ -154,7 +154,7 @@ def generate_airflow_dag(
                     + xcom
                     + "') }}"
                 )
-                return_dict[xcom] = value
+                return_dict[xcom] = value.replace("[", "").replace("]", "")
         return return_dict
 
     def return_cmds(task_dict: dict) -> list:
@@ -233,10 +233,6 @@ def generate_airflow_dag(
             return dbt_all_args
 
         elif task_dict["task_type"] == "python":
-            # TODO: add support for xcom_val
-            xcom_val = extract_xcom_data(task_dict)
-            dag_params.update(xcom_val)
-
             list_args = []
             for key in dag_params:
                 list_args.append(f"--{key}")
@@ -249,6 +245,11 @@ def generate_airflow_dag(
                     .replace("[", "")
                     .replace("]", "")
                 )
+
+            xcom_val = extract_xcom_data(task_dict)
+            for key, val in xcom_val.items():
+                list_args.append(f"--{key}")
+                list_args.append(val)
 
             return list_args
 
