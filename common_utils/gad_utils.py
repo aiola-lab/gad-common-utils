@@ -273,10 +273,9 @@ def generate_airflow_dag(
             print("xcom push", "key", key, "val", value[0][0][key])
 
             # pull initial dbt_vars from xcom
-            dbt_vars = task_instance.xcom_pull(
+            dbt_vars_dict = task_instance.xcom_pull(
                 task_ids=["digest_args_task"], key="dbt_vars"
             )
-            dbt_vars_dict = ast.literal_eval(dbt_vars[0])
             # add new dbt vars from XCOM of another task to dbt_vars_dict
             dbt_vars_dict[key] = value[0][0][key]
 
@@ -303,12 +302,8 @@ def generate_airflow_dag(
 
         print(f"args_to_use: {args_to_use}")
 
-        # create a string of the dbt vars to be used and push to xcom as one string
-        dbt_vars = (
-            "{"
-            + ", ".join([f'"{k}": "{v}"' for k, v in args_to_use.items() if v != ""])
-            + "}"
-        )
+        # create a dict of non-empty dbt vars and push to xcom
+        dbt_vars = {k: str(v) for k, v in args_to_use.items() if v != ""}
         kwargs["ti"].xcom_push(key="dbt_vars", value=dbt_vars)
 
         # push each python arg to xcom
