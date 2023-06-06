@@ -81,7 +81,7 @@ def generate_airflow_dag(
     schedule_interval,
     tasks: list,
     content_path: str = "gad-deliveries",
-    extra_params: dict = {},
+    dag_params: dict = {},
 ):
     """
     Creates a DAG using the specified parameters.
@@ -233,11 +233,12 @@ def generate_airflow_dag(
             return dbt_all_args
 
         elif task_dict["task_type"] == "python":
+            # TODO: add support for xcom_val
             xcom_val = extract_xcom_data(task_dict)
-            all_params.update(xcom_val)
+            dag_params.update(xcom_val)
 
             list_args = []
-            for key in all_params:
+            for key in dag_params:
                 list_args.append(f"--{key}")
                 list_args.append(
                     (
@@ -251,7 +252,7 @@ def generate_airflow_dag(
 
             return list_args
 
-    def parse_xcoms(task_id, task_type, **kwargs):
+    def parse_xcoms(task_id, **kwargs):
         """
         This function extracts XCom data from a specified task instance and pushes the data to XCom with individual keys.
 
@@ -266,18 +267,21 @@ def generate_airflow_dag(
         """
         task_instance = kwargs["ti"]
         value = task_instance.xcom_pull(task_ids=task_id)
-        print(f"taskt_type is: {task_type}")
+
         for key in value[0][0].keys():
             print("xcom push", "key", key, "val", value[0][0][key])
 
+            # pull initial dbt_vars from xcom
             dbt_vars = task_instance.xcom_pull(
                 task_ids=["digest_args_task"], key="dbt_vars"
             )
             dbt_vars_dict = ast.literal_eval(dbt_vars[0])
             dbt_vars_dict[key] = value[0][0][key]
 
+            # push individual xcoms for python use
             task_instance.xcom_push(key=key, value=value[0][0][key])
 
+        # push dbt_vars back to xcom
         task_instance.xcom_push(key="dbt_vars", value=dbt_vars_dict)
 
     def digest_args(given_args, default_args, **kwargs):
@@ -299,28 +303,16 @@ def generate_airflow_dag(
 
         # create a string of the dbt vars to be used and push to xcom as one string
         dbt_vars = (
-            "{" + ", ".join([f'"{k}": "{v}"' for k, v in args_to_use.items()]) + "}"
+            "{"
+            + ", ".join([f'"{k}": "{v}"' for k, v in args_to_use.items() if v != ""])
+            + "}"
         )
         kwargs["ti"].xcom_push(key="dbt_vars", value=dbt_vars)
 
         # push each python arg to xcom
         for arg in args_to_use:
-            kwargs["ti"].xcom_push(key=arg, value=args_to_use[arg])
-
-    default_params = {
-        "FROM_TIMESTAMP": "",
-        "TO_TIMESTAMP": "",
-        "FULL_LOAD": False,
-        "FULL_LOAD_FROM_TIMESTAMP": "",
-        "FULL_LOAD_FROM_TIMESTAMP_MONTHS_BACK": 3,
-        "ATHENA_WORKGROUP": "primary",
-    }
-
-    # combine the default params with the extra params
-    default_params.update(extra_params)
-
-    # create a dict that contains both default and extra params
-    all_params = default_params.copy()
+            if args_to_use[arg]:
+                kwargs["ti"].xcom_push(key=arg, value=args_to_use[arg])
 
     # dag creation
     dag = DAG(
@@ -329,7 +321,7 @@ def generate_airflow_dag(
         schedule_interval=schedule_interval,
         max_active_runs=1,
         concurrency=10,
-        params=all_params,
+        params=dag_params,
     )
 
     """
@@ -345,7 +337,7 @@ def generate_airflow_dag(
 
     # Iterate through the original tasks list and add each task to the new list
     # If a task has an xcom_push attribute set to True, create a new service task and add it to the new list
-    for i, task in enumerate(tasks):
+    for task in tasks:
         new_tasks_list.append(task)
         if "xcom_push" in task.keys():
             if task["xcom_push"]:
@@ -354,7 +346,6 @@ def generate_airflow_dag(
                     "task_id": f"{previous_task_id}_service_task",
                     "service": True,
                     "upstream": [previous_task_id],
-                    "downstream_task_type": tasks[i + 1]["task_type"],
                 }
                 new_tasks_list.append(service_task)
 
@@ -376,7 +367,7 @@ def generate_airflow_dag(
             service_task = PythonOperator(
                 task_id=task["task_id"],
                 python_callable=parse_xcoms,
-                op_args=[task["upstream"], task["downstream_task_type"]],
+                op_args=[task["upstream"]],
                 dag=dag,
             )
             kubernetes_tasks[task["task_id"]] = service_task
