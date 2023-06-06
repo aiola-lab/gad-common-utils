@@ -1,4 +1,4 @@
-import argparse
+import ast
 import logging
 import os
 from datetime import datetime
@@ -47,7 +47,7 @@ class dataLoadingManagement:
         """
         self.given_from_timestamp = from_timestamp
         self.given_to_timestamp = to_timestamp
-        self.full_load = full_load
+        self.full_load = ast.literal_eval(full_load)
         self.full_load_from_timestamp = full_load_from_timestamp
         self.full_load_from_timestamp_months_back = full_load_from_timestamp_months_back
 
