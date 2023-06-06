@@ -234,7 +234,7 @@ def generate_airflow_dag(
 
         elif task_dict["task_type"] == "python":
             list_args = []
-            for key in dag_params:
+            for key in dag_params_not_empty:
                 list_args.append(f"--{key}")
                 list_args.append(
                     (
@@ -316,7 +316,7 @@ def generate_airflow_dag(
                 kwargs["ti"].xcom_push(key=arg, value=args_to_use[arg])
 
     # use only the params that are not empty
-    dag_params = {k: v for k, v in dag_params.items() if v != ""}
+    dag_params_not_empty = {k: v for k, v in dag_params.items() if v != ""}
 
     # dag creation
     dag = DAG(
