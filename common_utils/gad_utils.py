@@ -277,6 +277,7 @@ def generate_airflow_dag(
                 task_ids=["digest_args_task"], key="dbt_vars"
             )
             dbt_vars_dict = ast.literal_eval(dbt_vars[0])
+            # add new dbt vars from XCOM of another task to dbt_vars_dict
             dbt_vars_dict[key] = value[0][0][key]
 
             # push individual xcoms for python use
@@ -362,7 +363,8 @@ def generate_airflow_dag(
     # Define a dictionary to store KubernetesPodOperator and PythonOperator tasks
     kubernetes_tasks = {}
 
-    last_service_task_id = ""
+    # this variable is used to store the task id of the last task that updated the dbt_vars key in xcom. It can be either "digest_args_task" or a service task. If there are no service tasks - it will be "digest_args_task"
+    last_service_task_id = "digest_args_task"
 
     # Iterate through each task in the new list and create a KubernetesPodOperator or PythonOperator task based on its properties
     for task in new_tasks_list:
