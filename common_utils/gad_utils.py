@@ -9,13 +9,12 @@ from airflow.utils.dates import days_ago
 from kubernetes.client import models as k8s
 
 
-def return_dag_ingrediants(content_path, project):
+def return_dag_ingrediants(project):
     """
     This function returns a tuple that contains various objects used in an Airflow DAG
     for the specified project.
 
     Parameters:
-        content_path (str): The path of the content we want to run via DAG.
         project (str): The name of the project for which to return the DAG ingredients.
 
     Returns:
@@ -27,7 +26,7 @@ def return_dag_ingrediants(content_path, project):
             - volumes_mounts (list): A list of V1VolumeMount objects that specify the volume mounts to use in the Kubernetes Pod.
     """
     WORK_DIR = "/opt/aiola/projects"
-    SUB_FOLDER = os.environ.get("DEPLOYMENT_DIR", content_path)
+    SUB_FOLDER = os.environ.get("DEPLOYMENT_DIR", "gad-deliveries")
     PROJECT_DIR = f"{WORK_DIR}/{SUB_FOLDER}/{project}"
     DBT_OUTPUT_DIR = "/opt/airflow/logs"
     PYTHON_DIR = f"{PROJECT_DIR}/python"
@@ -74,13 +73,7 @@ def return_dag_ingrediants(content_path, project):
     return paths, default_args, envFromSource, volumes, volumes_mounts
 
 
-def generate_airflow_dag(
-    project: str,
-    dag_id: str,
-    schedule_interval,
-    tasks: list,
-    content_path: str = "gad-deliveries",
-):
+def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: list):
     """
     Creates a DAG using the specified parameters.
 
@@ -89,14 +82,13 @@ def generate_airflow_dag(
         dag_id (str): The ID of the DAG.
         schedule_interval (str): The schedule interval for the DAG.
         tasks (list): A list of dictionaries containing information about each task.
-        content_path (str): The path of the content we want to run via DAG. by default it would get "gad-deliveries" as its the local content.
 
     Returns:
         dag (DAG): A DAG object.
     """
 
     paths, default_args, envConfigMap, volumes, volumes_mounts = return_dag_ingrediants(
-        content_path, project
+        project
     )
 
     def return_image_name(task_type):
