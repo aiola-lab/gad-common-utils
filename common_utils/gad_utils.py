@@ -283,25 +283,6 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             print("xcom push", "key", i, "val", value[0][0][i])
             task_instance.xcom_push(key=i, value=value[0][0][i])
 
-    def get_env_prefix_from_configmap(namespace, configmap_name):
-        # Load the in-cluster Kubernetes configuration
-        config.load_incluster_config()
-
-        # Create an instance of the Kubernetes API client
-        v1 = client.CoreV1Api()
-
-        try:
-            # Retrieve the ConfigMap
-            configmap = v1.read_namespaced_config_map(configmap_name, namespace)
-
-            # Access the 'ENV_PREFIX' value from the ConfigMap
-            env_prefix = configmap.data["ENV_PREFIX"]
-
-            return env_prefix
-        except client.exceptions.ApiException as e:
-            print(f"Exception when calling CoreV1Api->read_namespaced_config_map: {e}")
-            return None
-
     def list_all_conversations(client):
         """
         Retrieves a list of all conversations (channels) from Slack using the provided client.
@@ -359,6 +340,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
 
         Parameters:
             slack_channel (str): The name of the slack channel to be checked.
+            client (object): The Slack client interact with the Slack API.
 
         Returns:
             bool: True if the specified slack channel exists, False otherwise.
@@ -478,8 +460,6 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         )
         print(f"Slack channel: {slack_channel}")
         user_id = os.environ.get("user_id")
-
-        # slack_channel = get_env_prefix_from_configmap('default','gad-configmap') + "_alerts"
 
         slack_message = build_slack_message(context)
         # slack_channel = os.getenv("ENV_PREFIX") + "_alerts"
