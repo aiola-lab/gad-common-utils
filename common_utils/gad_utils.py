@@ -430,7 +430,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
         Link to Log: {task_log_url}
         Start Time of Running DAG: {dag_execution_date}
         Start Time of Running Task: {task_instance.start_date}
-        "Numer of Tries of Task: {task_instance.try_number}
+        "Number of Tries of Task: {task_instance.try_number}
         Number of Incomplete Tasks: {num_incomplete}
         """
 
@@ -456,7 +456,7 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
             print("Slack API token exists, getting to business")
 
         slack_channel = (
-            os.getenv("ENV_PREFIX") + "_" + os.getenv("REGION") + "_gad_alerts"
+            os.getenv("ENV_PREFIX") + "-" + os.getenv("REGION") + "-gad-alerts"
         )
         print(f"Slack channel: {slack_channel}")
         user_id = os.environ.get("user_id")
@@ -480,18 +480,19 @@ def generate_airflow_dag(project: str, dag_id: str, schedule_interval, tasks: li
                     print(
                         f"New channel created. name: {slack_channel} id: {channel_id}"
                     )
-                    print(f"Installing Slack app in channel '{slack_channel}'...")
-                    response = client.conversations_invite(
-                        channel=channel_id, users=user_id
-                    )
-                    if response["ok"]:
-                        print(
-                            f"Succeeded in inviting user {user_id} to channel {slack_channel}"
+                    if user_id is not None:
+                        print(f"Installing Slack app in channel '{slack_channel}'...")
+                        response = client.conversations_invite(
+                            channel=channel_id, users=user_id
                         )
-                    else:
-                        print(
-                            f"Failed in inviting user {user_id} to channel {slack_channel}"
-                        )
+                        if response["ok"]:
+                            print(
+                                f"Succeeded in inviting user {user_id} to channel {slack_channel}"
+                            )
+                        else:
+                            print(
+                                f"Failed in inviting user {user_id} to channel {slack_channel}"
+                            )
 
                 else:
                     print(f"Failed to create channel: {response['error']}")
