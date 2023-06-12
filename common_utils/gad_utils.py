@@ -1,5 +1,4 @@
 import ast
-import json
 import os
 from datetime import timedelta
 
@@ -181,20 +180,18 @@ def generate_airflow_dag(
         elif task_dict["task_type"] == "python":
             return ["python", f"{paths['PYTHON_DIR']}/{task_dict['executable']}.py"]
 
-    def return_command_args(task_dict: dict, last_service_task_id: str) -> list:
+    def return_command_args(task_dict: dict, xcom_pull_task_id: str) -> list:
         """Returns a list of command-line arguments based on task_dict and configs.
 
         Args:
-        task_dict: A dictionary containing information about the task to be executed.
+        task_dict: dict
+        A dictionary containing information about the task to be executed.
                 The dictionary must have 'task_type' key with value 'dbt' or 'python'.
                 If 'task_type' is 'dbt', then the dictionary must have 'dbt_models' key
                 with a list of strings containing the names of dbt models to be executed.
 
-        configs: A dictionary containing configuration values for the task.
-                If the task is of type 'dbt', then the dictionary can have 'dbt_vars' key
-                with a string value containing the variable values to be passed to dbt.
-                If the task is of type 'python', then the dictionary can have 'python_args'
-                key with a list of strings containing command-line arguments for the python script.
+        xcom_pull_task_id: str
+        The task ID of either the digest_args_task or the last service task that pushed data to XCom.
 
         Returns:
         A list of command-line arguments based on the task and configuration values.
@@ -216,14 +213,19 @@ def generate_airflow_dag(
                 paths["DBT_OUTPUT_DIR"],
             ]
 
+            # get the latest version of dbt vars from XCOM
             dbt_vars = (
                 (
                     "{{ ti.xcom_pull(task_ids=['"
-                    + last_service_task_id
+                    + xcom_pull_task_id
                     + "'], key='dbt_vars') }}"
                 )
-                .replace("[", "")
-                .replace("]", "")
+                .replace(
+                    "[", ""
+                )  # this is MANDATORY to make sure we get the right value from XCOM (using [1:-1] doesn't work)
+                .replace(
+                    "]", ""
+                )  # this is MANDATORY to make sure we get the right value from XCOM (using [1:-1] doesn't work)
             )
 
             dbt_all_args = (
@@ -234,6 +236,7 @@ def generate_airflow_dag(
 
         elif task_dict["task_type"] == "python":
             list_args = []
+            # iterate over the non-empty dag_params, pull them from XCOM ands add them to the list
             for key in dag_params_not_empty:
                 list_args.append(f"--{key}")
                 list_args.append(
@@ -242,10 +245,15 @@ def generate_airflow_dag(
                         + key
                         + "') }}"
                     )
-                    .replace("[", "")
-                    .replace("]", "")
+                    .replace(
+                        "[", ""
+                    )  # this is MANDATORY to make sure we get the right value from XCOM (using [1:-1] doesn't work)
+                    .replace(
+                        "]", ""
+                    )  # this is MANDATORY to make sure we get the right value from XCOM (using [1:-1] doesn't work)
                 )
 
+            # get the xcom values
             xcom_val = extract_xcom_data(task_dict)
             for key, val in xcom_val.items():
                 list_args.append(f"--{key}")
