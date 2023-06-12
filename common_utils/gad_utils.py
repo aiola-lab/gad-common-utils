@@ -455,34 +455,29 @@ def generate_airflow_dag(
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "*Name of EC2 Machine:* " + ec2_machine_name,
+                    "text": "*EC2 Machine:* " + ec2_machine_name,
                 },
             },
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "*Name of DAG:* " + dag_id},
+                "text": {"type": "mrkdwn", "text": "*DAG:* " + dag_id},
             },
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "*Name of Task:* " + task_id},
-            },
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": "*Link to Log:* " + task_log_url},
+                "text": {"type": "mrkdwn", "text": "*Task:* " + task_id},
             },
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "*Start Time of Running DAG:* " + str(dag_execution_date),
+                    "text": "*Start Time DAG:* " + str(dag_execution_date),
                 },
             },
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "*Start Time of Running Task:* "
-                    + str(task_instance.start_date),
+                    "text": "*Start Time Task:* " + str(task_instance.start_date),
                 },
             },
             {
@@ -492,6 +487,10 @@ def generate_airflow_dag(
                     "text": "*Number of Tries of Task:* "
                     + str(task_instance.try_number),
                 },
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*Log:* " + task_log_url},
             },
         ]
 
