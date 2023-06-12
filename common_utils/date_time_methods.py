@@ -62,6 +62,7 @@ class dateTimeMethods:
                 sql=f"""select coalesce(max({col_name}), timestamp'{default_from_timestamp}') as max_timestamp from {tbl_name}""",
                 database=database,
                 workgroup=workgroup,
+                ctas_approach=False,
             )
 
             max_timestamp = df["max_timestamp"][0]
