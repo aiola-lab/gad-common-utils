@@ -275,7 +275,7 @@ def generate_airflow_dag(
             # pull initial dbt_vars from xcom
             dbt_vars_dict = task_instance.xcom_pull(
                 task_ids=["digest_args_task"], key="dbt_vars"
-            )
+            )[0]
             # add new dbt vars from XCOM of another task to dbt_vars_dict
             dbt_vars_dict[key] = value[0][0][key]
 
