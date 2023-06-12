@@ -64,7 +64,6 @@ class dateTimeMethods:
                 workgroup=workgroup,
                 ctas_approach=False,
             )
-
             max_timestamp = df["max_timestamp"][0]
 
         except Exception as e:
