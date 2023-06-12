@@ -388,7 +388,7 @@ def generate_airflow_dag(
             raise AirflowException(
                 f"Failed to retrieve bot user name: {e.response['error']}"
             )
-        return ""
+        return ""  # TO BE REMOVED
 
     def build_slack_message(context):
         print("Strting to build Slack message")
@@ -409,40 +409,96 @@ def generate_airflow_dag(
         # Retrieve EC2 machine IP address
         my_ip = requests.get("https://checkip.amazonaws.com").text.strip()
 
-        # Retrieve logs
-        logs = task_instance.log
-
-        # Retrieve number of incomplete tasks
-        session = settings.Session()
-        num_incomplete = (
-            session.query(func.count())
-            .filter(
-                TaskInstance.dag_id == dag_id,
-                TaskInstance.execution_date == dag_execution_date,
-                TaskInstance.state != "success",
-            )
-            .scalar()
-        )
-        session.close()
-
         # Change local host to this machine ip
         task_log_url = str(task_instance.log_url).replace("localhost", my_ip)
 
         # TODO: Add abillity to send the pod stdout to slack
 
         slack_message = f"""
-        Name of EC2 Machine: {ec2_machine_name} 
-        Name of DAG: {dag_id}
-        Name of Task: {task_id}
-        Exception of DAG: {logs}
-        Link to Log: {task_log_url}
-        Start Time of Running DAG: {dag_execution_date}
-        Start Time of Running Task: {task_instance.start_date}
-        "Number of Tries of Task: {task_instance.try_number}
-        Number of Incomplete Tasks: {num_incomplete}
+        *Name of EC2 Machine*: {ec2_machine_name} 
+        *Name of DAG*: {dag_id}
+        *Name of Task*: {task_id}
+        *Link to Log*: {task_log_url}
+        *Start Time of Running DAG*: {dag_execution_date}
+        *Start Time of Running Task*: {task_instance.start_date}
+        *Number of Tries of Task*: {task_instance.try_number}
+        ----------------------------
         """
 
         return slack_message
+
+    def build_slack_message_blocks(context):
+        print("Starting to build Slack message")
+        task_instance = context["task_instance"]
+        dag_id = task_instance.dag_id
+        task_id = task_instance.task_id
+        dag_execution_date = context["dag_run"].logical_date
+        exception = context["exception"]
+
+        # Retrieve EC2 machine name
+        try:
+            ec2_machine_name = requests.get(
+                "http://169.254.169.254/latest/meta-data/hostname"
+            ).text
+        except requests.RequestException as e:
+            ec2_machine_name = "Unknown"
+
+        # Retrieve EC2 machine IP address
+        my_ip = requests.get("https://checkip.amazonaws.com").text.strip()
+
+        # Change local host to this machine IP
+        task_log_url = str(task_instance.log_url).replace("localhost", my_ip)
+
+        # Create the blocks for the message
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Name of EC2 Machine:* " + ec2_machine_name,
+                },
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*Name of DAG:* " + dag_id},
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*Name of Task:* " + task_id},
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*Link to Log:* " + task_log_url},
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Start Time of Running DAG:* " + str(dag_execution_date),
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Start Time of Running Task:* "
+                    + str(task_instance.start_date),
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Number of Tries of Task:* "
+                    + str(task_instance.try_number),
+                },
+            },
+        ]
+
+        # Convert the blocks to a JSON-encoded string
+        blocks_json = json.dumps(blocks)
+
+        return blocks_json
 
     def send_slack_notification(context) -> bool:
         """
@@ -469,7 +525,7 @@ def generate_airflow_dag(
         print(f"Slack channel: {slack_channel}")
         user_id = os.environ.get("user_id")
 
-        slack_message = build_slack_message(context)
+        slack_message = build_slack_message_blocks(context)
         # slack_channel = os.getenv("ENV_PREFIX") + "_alerts"
         client = WebClient(token=slack_token)
 
@@ -479,44 +535,42 @@ def generate_airflow_dag(
         # Check if the specified slack channel exists. If not, create it.
         print(f"Checking if Slack channel {slack_channel} exists...")
 
-        if not check_channel_exists(slack_channel, client):
-            try:
-                response = client.conversations_create(name=slack_channel)
+        # if not check_channel_exists(slack_channel, client):
+        try:
+            response = client.conversations_create(name=slack_channel)
 
-                if response["ok"]:
-                    channel_id = response["channel"]["id"]
-                    print(
-                        f"New channel created. name: {slack_channel} id: {channel_id}"
+            if response["ok"]:
+                channel_id = response["channel"]["id"]
+                print(f"New channel created. name: {slack_channel} id: {channel_id}")
+                if user_id is not None:
+                    print(f"Installing Slack app in channel '{slack_channel}'...")
+                    response = client.conversations_invite(
+                        channel=channel_id, users=user_id
                     )
-                    if user_id is not None:
-                        print(f"Installing Slack app in channel '{slack_channel}'...")
-                        response = client.conversations_invite(
-                            channel=channel_id, users=user_id
+                    if response["ok"]:
+                        print(
+                            f"Succeeded in inviting user {user_id} to channel {slack_channel}"
                         )
-                        if response["ok"]:
-                            print(
-                                f"Succeeded in inviting user {user_id} to channel {slack_channel}"
-                            )
-                        else:
-                            print(
-                                f"Failed in inviting user {user_id} to channel {slack_channel}"
-                            )
+                    else:
+                        print(
+                            f"Failed in inviting user {user_id} to channel {slack_channel}"
+                        )
 
-                else:
-                    print(f"Failed to create channel: {response['error']}")
+            else:
+                print(f"Failed to create channel: {response['error']}")
 
-            except SlackApiError as e:
-                if str(e.response["error"]) == "name_taken":
-                    print(f"Channel '{slack_channel}' already exists.")
+        except SlackApiError as e:
+            if str(e.response["error"]) == "name_taken":
+                print(f"Channel '{slack_channel}' already exists.")
 
-                else:
-                    print(f"Error creating channel: {e.response['error']}")
+            else:
+                print(f"Error creating channel: {e.response['error']}")
 
         # Try to send the message to the specified slack channel.
 
         try:
             response = client.chat_postMessage(
-                channel=slack_channel, text=slack_message, username=bot_user_name
+                channel=slack_channel, blocks=slack_message, username=bot_user_name
             )
             if not response["ok"]:
                 raise AirflowException(
