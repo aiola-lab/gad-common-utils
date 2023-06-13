@@ -153,7 +153,9 @@ def generate_airflow_dag(
                     + xcom
                     + "') }}"
                 )
-                return_dict[xcom] = value.replace("[", "").replace("]", "")
+                return_dict[xcom] = value.replace("[", "").replace(
+                    "]", ""
+                )  # this is MANDATORY to make sure we get the right value from XCOM (using [1:-1] doesn't work)
         return return_dict
 
     def return_cmds(task_dict: dict) -> list:
