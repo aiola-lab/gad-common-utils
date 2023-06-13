@@ -418,13 +418,13 @@ def generate_airflow_dag(
             )
             kubernetes_tasks[task["task_id"]] = kubernetes_task
 
+    # Define an empty list to store tasks without upstream dependencies, so we will set
+    # the digest_args_task as their upstream
+    tasks_without_upstream = []
+
     # using the tasks list, and the kubernetes_tasks dictionary - this loop creates the dependancies.
     # each task in tasks contains a value in the 'upstream' key that tells what is the pervious task (or tasks).
     # the kubernates operator created gets the dependancies and is configured to use them with the set_upstream setting.
-
-    # Define an empty list to store tasks without upstream dependencies, so we will set the digest_args_task as their upstream
-    tasks_without_upstream = []
-
     for task in new_tasks_list:
         if task["upstream"] is None or task["upstream"] == "" or task["upstream"] == []:
             tasks_without_upstream.append(kubernetes_tasks[task["task_id"]])
