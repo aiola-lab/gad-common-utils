@@ -269,7 +269,6 @@ def generate_airflow_dag(
 
         Parameters:
             task_id (str): The ID of the task instance from which to extract XCom data.
-            task_type (str): The type of task that will pull the XCOM. This must be either 'dbt' or 'python'.
             **kwargs: A dictionary containing additional keyword arguments. This dictionary must contain the 'ti' key, which
                     provides the task instance.
 
