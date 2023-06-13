@@ -65,6 +65,7 @@ class dataLoadingManagement:
         self.from_timestamp = None
         self.to_timestamp = None
 
+        # we define the session here so that it can be used by all the functions
         boto3.setup_default_session(region_name=os.environ.get("REGION"))
 
         self.set_from_and_to_timestamps(as_dates=from_and_to_as_dates)
