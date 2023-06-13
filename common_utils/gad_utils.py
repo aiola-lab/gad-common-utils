@@ -293,25 +293,35 @@ def generate_airflow_dag(
         # push dbt_vars back to xcom
         task_instance.xcom_push(key="dbt_vars", value=dbt_vars_dict)
 
-    def digest_args(given_args, default_args, **kwargs):
-        print(f"given_args: {given_args}")
-        print(f"default_args: {default_args}")
+    def digest_args(given_args: str, default_args: str, **kwargs):
+        """
+        Process and store arguments for further use.
 
+        Args:
+            given_args (str): A string representing the given arguments.
+            default_args (str): A string representing the default arguments.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            None
+        """
+        print(f"The given args: {given_args}")
+        print(f"The default args: {default_args}")
+
+        # convert both set of args from string to dict
         given_args_dict = ast.literal_eval(given_args)
         default_args_dict = ast.literal_eval(default_args)
 
         args_to_use = {}
         if given_args_dict:
-            print("using given args")
+            print("There are some given args, using given args")
             args_to_use = given_args_dict
         else:
-            print("using default args")
+            print("There are NO given args, using default args")
             args_to_use = default_args_dict
 
-        print(f"args_to_use: {args_to_use}")
-
         # create a dict of non-empty dbt vars and push to xcom
-        dbt_vars = {k: str(v) for k, v in args_to_use.items() if v != ""}
+        dbt_vars = {key: str(val) for key, val in args_to_use.items() if val != ""}
         kwargs["ti"].xcom_push(key="dbt_vars", value=dbt_vars)
 
         # push each python arg to xcom
@@ -320,7 +330,7 @@ def generate_airflow_dag(
                 kwargs["ti"].xcom_push(key=arg, value=args_to_use[arg])
 
     # use only the params that are not empty
-    dag_params_not_empty = {k: v for k, v in dag_params.items() if v != ""}
+    dag_params_not_empty = {key: val for key, val in dag_params.items() if val != ""}
 
     # dag creation
     dag = DAG(
@@ -412,6 +422,7 @@ def generate_airflow_dag(
     # each task in tasks contains a value in the 'upstream' key that tells what is the pervious task (or tasks).
     # the kubernates operator created gets the dependancies and is configured to use them with the set_upstream setting.
 
+    # Define an empty list to store tasks without upstream dependencies, so we will set the digest_args_task as their upstream
     tasks_without_upstream = []
 
     for task in new_tasks_list:
@@ -424,6 +435,7 @@ def generate_airflow_dag(
                 dependancies.append(kubernetes_tasks[t])
             kubernetes_tasks[task["task_id"]].set_upstream(dependancies)
 
+    # define the digest_args_task and set it as upstream for all tasks without upstream dependencies
     digest_args_task = PythonOperator(
         task_id="digest_args_task",
         python_callable=digest_args,
