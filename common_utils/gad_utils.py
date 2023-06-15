@@ -294,24 +294,24 @@ def generate_airflow_dag(
         # push dbt_vars back to xcom
         task_instance.xcom_push(key="dbt_vars", value=dbt_vars_dict)
 
-    def digest_args(given_args: str, default_args: str, **kwargs):
+    def digest_args(given_args: str, default_args_dict: dict, **kwargs):
         """
         Process and store arguments for further use.
 
         Args:
             given_args (str): A string representing the given arguments.
-            default_args (str): A string representing the default arguments.
+            default_args_dict (dict): A dict of the default arguments.
             **kwargs: Additional keyword arguments.
 
         Returns:
             None
         """
-        print(f"The given args: {given_args}")
-        print(f"The default args: {default_args}")
 
-        # convert both set of args from string to dict
+        # convert the given args to a dict
         given_args_dict = ast.literal_eval(given_args)
-        default_args_dict = ast.literal_eval(default_args)
+
+        print(f"The given args: {given_args}")
+        print(f"The default args: {default_args_dict}")
 
         args_to_use = {}
         if given_args_dict:
