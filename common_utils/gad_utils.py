@@ -440,7 +440,7 @@ def generate_airflow_dag(
     digest_args_task = PythonOperator(
         task_id="digest_args_task",
         python_callable=digest_args,
-        op_kwargs={"given_args": "{{ dag_run.conf }}", "default_args": dag_params},
+        op_kwargs={"given_args": "{{ dag_run.conf }}", "default_args_dict": dag_params},
         dag=dag,
     ).set_downstream(tasks_without_upstream)
 
