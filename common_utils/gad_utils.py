@@ -1,4 +1,4 @@
-import json
+import ast
 import os
 import time
 from datetime import datetime, timedelta
@@ -88,6 +88,7 @@ def generate_airflow_dag(
     schedule_interval,
     tasks: list,
     content_path: str = "gad-deliveries",
+    dag_params: dict = {},
 ):
     """
     Creates a DAG using the specified parameters.
@@ -160,7 +161,9 @@ def generate_airflow_dag(
                     + xcom
                     + "') }}"
                 )
-                return_dict[xcom] = value
+                return_dict[xcom] = value.replace("[", "").replace(
+                    "]", ""
+                )  # this is MANDATORY to make sure we get the right value from XCOM (using [1:-1] doesn't work)
         return return_dict
 
     def return_cmds(task_dict: dict) -> list:
@@ -187,20 +190,18 @@ def generate_airflow_dag(
         elif task_dict["task_type"] == "python":
             return ["python", f"{paths['PYTHON_DIR']}/{task_dict['executable']}.py"]
 
-    def return_command_args(task_dict: dict, configs: dict) -> list:
+    def return_command_args(task_dict: dict, xcom_pull_task_id: str) -> list:
         """Returns a list of command-line arguments based on task_dict and configs.
 
         Args:
-        task_dict: A dictionary containing information about the task to be executed.
+        task_dict: dict
+        A dictionary containing information about the task to be executed.
                 The dictionary must have 'task_type' key with value 'dbt' or 'python'.
                 If 'task_type' is 'dbt', then the dictionary must have 'dbt_models' key
                 with a list of strings containing the names of dbt models to be executed.
 
-        configs: A dictionary containing configuration values for the task.
-                If the task is of type 'dbt', then the dictionary can have 'dbt_vars' key
-                with a string value containing the variable values to be passed to dbt.
-                If the task is of type 'python', then the dictionary can have 'python_args'
-                key with a list of strings containing command-line arguments for the python script.
+        xcom_pull_task_id: str
+        The task ID of either the digest_args_task or the last service task that pushed data to XCom.
 
         Returns:
         A list of command-line arguments based on the task and configuration values.
@@ -209,8 +210,6 @@ def generate_airflow_dag(
         If task_type is 'python', then the returned list will contain arguments specified
         in the 'python_args' key of the configs dictionary.
         """
-
-        xcom_val = extract_xcom_data(task_dict)
 
         if task_dict["task_type"] == "dbt":
             dbt_default_args = [
@@ -224,54 +223,53 @@ def generate_airflow_dag(
                 paths["DBT_OUTPUT_DIR"],
             ]
 
-            dbt_default_args_and_models = task_dict["dbt_models"] + dbt_default_args
+            # get the latest version of dbt vars from XCOM
+            dbt_vars = (
+                (
+                    "{{ ti.xcom_pull(task_ids=['"
+                    + xcom_pull_task_id
+                    + "'], key='dbt_vars') }}"
+                )
+                .replace(
+                    "[", ""
+                )  # this is MANDATORY to make sure we get the right value from XCOM (using [1:-1] doesn't work)
+                .replace(
+                    "]", ""
+                )  # this is MANDATORY to make sure we get the right value from XCOM (using [1:-1] doesn't work)
+            )
 
-            dbt_vars = configs.get("dbt_vars")
-            if dbt_vars:
-                dbt_vars.update(xcom_val)
-                dbt_all_args = dbt_default_args_and_models + [
-                    "--vars",
-                    json.dumps(dbt_vars),
-                ]
-            elif bool(xcom_val):
-                dbt_all_args = dbt_default_args_and_models + [
-                    "--vars",
-                    json.dumps(xcom_val),
-                ]
-            else:
-                dbt_all_args = dbt_default_args_and_models
+            dbt_all_args = (
+                task_dict["dbt_models"] + dbt_default_args + ["--vars", dbt_vars]
+            )
 
             return dbt_all_args
 
         elif task_dict["task_type"] == "python":
-            if configs.get("python_args"):
-                python_args = configs.get("python_args")
-            else:
-                python_args = {}
-            python_args.update(xcom_val)
             list_args = []
-            if python_args:
-                for key in python_args:
-                    list_args.append(f"--{key}")
-                    if python_args[key]:
-                        list_args.append(python_args[key])
+            # iterate over the non-empty dag_params, pull them from XCOM ands add them to the list
+            for key in dag_params_not_empty:
+                list_args.append(f"--{key}")
+                list_args.append(
+                    (
+                        "{{ ti.xcom_pull(task_ids=['digest_args_task'], key='"
+                        + key
+                        + "') }}"
+                    )
+                    .replace(
+                        "[", ""
+                    )  # this is MANDATORY to make sure we get the right value from XCOM (using [1:-1] doesn't work)
+                    .replace(
+                        "]", ""
+                    )  # this is MANDATORY to make sure we get the right value from XCOM (using [1:-1] doesn't work)
+                )
+
+            # get the xcom values
+            xcom_val = extract_xcom_data(task_dict)
+            for key, val in xcom_val.items():
+                list_args.append(f"--{key}")
+                list_args.append(val)
+
             return list_args
-
-    def return_configs() -> dict:
-        """
-        Returns the dictionary of configurations read from a JSON file.
-
-        Parameters:
-        None
-
-        Returns:
-        dict: A dictionary containing the configurations read from the JSON file located in the CONFIG_DIR directory.
-
-        """
-
-        with open(f"{paths['CONFIG_DIR']}/config.json", "r") as f:
-            j = f.read()
-        return json.loads(j)
 
     def parse_xcoms(task_id, **kwargs):
         """
@@ -287,9 +285,61 @@ def generate_airflow_dag(
         """
         task_instance = kwargs["ti"]
         value = task_instance.xcom_pull(task_ids=task_id)
-        for i in value[0][0].keys():
-            print("xcom push", "key", i, "val", value[0][0][i])
-            task_instance.xcom_push(key=i, value=value[0][0][i])
+
+        for key in value[0][0].keys():
+            print("xcom push", "key", key, "val", value[0][0][key])
+
+            # pull initial dbt_vars from xcom
+            dbt_vars_dict = task_instance.xcom_pull(
+                task_ids=["digest_args_task"], key="dbt_vars"
+            )[0]
+            # add new dbt vars from XCOM of another task to dbt_vars_dict
+            dbt_vars_dict[key] = value[0][0][key]
+
+            # push individual xcoms for python use
+            task_instance.xcom_push(key=key, value=value[0][0][key])
+
+        # push dbt_vars back to xcom
+        task_instance.xcom_push(key="dbt_vars", value=dbt_vars_dict)
+
+    def digest_args(given_args: str, default_args_dict: dict, **kwargs):
+        """
+        Process and store arguments for further use.
+
+        Args:
+            given_args (str): A string representing the given arguments.
+            default_args_dict (dict): A dict of the default arguments.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            None
+        """
+
+        # convert the given args to a dict
+        given_args_dict = ast.literal_eval(given_args)
+
+        print(f"The given args: {given_args}")
+        print(f"The default args: {default_args_dict}")
+
+        args_to_use = {}
+        if given_args_dict:
+            print("There are some given args, using given args")
+            args_to_use = given_args_dict
+        else:
+            print("There are NO given args, using default args")
+            args_to_use = default_args_dict
+
+        # create a dict of non-empty dbt vars and push to xcom
+        dbt_vars = {key: str(val) for key, val in args_to_use.items() if val != ""}
+        kwargs["ti"].xcom_push(key="dbt_vars", value=dbt_vars)
+
+        # push each python arg to xcom
+        for arg in args_to_use:
+            if args_to_use[arg] != "":
+                kwargs["ti"].xcom_push(key=arg, value=args_to_use[arg])
+
+    # use only the params that are not empty
+    dag_params_not_empty = {key: val for key, val in dag_params.items() if val != ""}
 
     def list_all_conversations(client):
         """
@@ -587,10 +637,8 @@ def generate_airflow_dag(
         schedule_interval=schedule_interval,
         max_active_runs=1,
         concurrency=10,
+        params=dag_params,
     )
-
-    configs = return_configs()
-    env_vars = configs.get("env_vars")
 
     """
     This code is a loop that iterates over a list of tasks and creates a KubernetesPodOperator object for each task.
@@ -626,6 +674,9 @@ def generate_airflow_dag(
     # Define a dictionary to store KubernetesPodOperator and PythonOperator tasks
     kubernetes_tasks = {}
 
+    # this variable is used to store the task id of the last task that updated the dbt_vars key in xcom. It can be either "digest_args_task" or a service task. If there are no service tasks - it will be "digest_args_task"
+    last_service_task_id = "digest_args_task"
+
     # Iterate through each task in the new list and create a KubernetesPodOperator or PythonOperator task based on its properties
     for task in new_tasks_list:
         # If the task is a service task, create a PythonOperator with parse_xcoms function as its callable
@@ -639,17 +690,18 @@ def generate_airflow_dag(
                 provide_context=True,
             )
             kubernetes_tasks[task["task_id"]] = service_task
+            last_service_task_id = task["task_id"]
 
         # If the task is not a service task, create a KubernetesPodOperator
         else:
             cmds = return_cmds(task)
-            arguments = return_command_args(task, configs)
+            arguments = return_command_args(task, last_service_task_id)
             image = return_image_name(task["task_type"])
 
             kubernetes_task = KubernetesPodOperator(
                 volumes=volumes,
                 volume_mounts=volumes_mounts,
-                env_vars=env_vars,
+                env_vars=[],
                 env_from=[envConfigMap],
                 namespace="default",
                 labels={"Task": task["task_type"]},
@@ -667,17 +719,29 @@ def generate_airflow_dag(
             )
             kubernetes_tasks[task["task_id"]] = kubernetes_task
 
+    # Define an empty list to store tasks without upstream dependencies, so we will set
+    # the digest_args_task as their upstream
+    tasks_without_upstream = []
+
     # using the tasks list, and the kubernetes_tasks dictionary - this loop creates the dependancies.
     # each task in tasks contains a value in the 'upstream' key that tells what is the pervious task (or tasks).
     # the kubernates operator created gets the dependancies and is configured to use them with the set_upstream setting.
-
     for task in new_tasks_list:
         if task["upstream"] is None or task["upstream"] == "" or task["upstream"] == []:
+            tasks_without_upstream.append(kubernetes_tasks[task["task_id"]])
             pass
         else:
             dependancies = []
             for t in task["upstream"]:
                 dependancies.append(kubernetes_tasks[t])
             kubernetes_tasks[task["task_id"]].set_upstream(dependancies)
+
+    # define the digest_args_task and set it as upstream for all tasks without upstream dependencies
+    digest_args_task = PythonOperator(
+        task_id="digest_args_task",
+        python_callable=digest_args,
+        op_kwargs={"given_args": "{{ dag_run.conf }}", "default_args_dict": dag_params},
+        dag=dag,
+    ).set_downstream(tasks_without_upstream)
 
     return dag
