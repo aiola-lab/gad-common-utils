@@ -1,12 +1,21 @@
 import ast
+import json
 import os
-from datetime import timedelta
+import time
+from datetime import datetime, timedelta
 
-from airflow import DAG
+import requests
+from airflow import DAG, settings
 from airflow.contrib.operators.kubernetes_pod_operator import KubernetesPodOperator
+from airflow.exceptions import AirflowException
+from airflow.models import TaskInstance
 from airflow.operators.python_operator import PythonOperator
 from airflow.utils.dates import days_ago
+from kubernetes import client, config
 from kubernetes.client import models as k8s
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+from sqlalchemy import func
 
 
 def return_dag_ingrediants(content_path, project):
@@ -333,6 +342,295 @@ def generate_airflow_dag(
     # use only the params that are not empty
     dag_params_not_empty = {key: val for key, val in dag_params.items() if val != ""}
 
+    def list_all_conversations(client):
+        """
+        Retrieves a list of all conversations (channels) from Slack using the provided client.
+
+        Args:
+            client (SlackClient): The Slack client object.
+
+        Returns:
+            list: A list of conversation objects.
+
+        Raises:
+            SlackApiError: If an error occurs while retrieving conversations from Slack.
+        """
+        all_conversations = []
+        max_retries = 5
+        retry_delay = 2
+        retry_counter = 0
+
+        while retry_counter < max_retries:
+            try:
+                response = client.conversations_list(
+                    types="private_channel,public_channel,mpim,im"
+                )
+                all_conversations.extend(response["channels"])
+
+                if (
+                    "response_metadata" in response
+                    and "next_cursor" in response["response_metadata"]
+                ):
+                    next_cursor = response["response_metadata"]["next_cursor"]
+                    response = client.conversations_list(
+                        cursor=next_cursor,
+                        types="private_channel,public_channel,mpim,im",
+                    )
+                else:
+                    break
+
+            except SlackApiError as e:
+                if e.response["error"] == "ratelimited":
+                    # Retry after the specified duration
+                    retry_after = int(e.response.headers["Retry-After"])
+                    time.sleep(retry_after)
+                else:
+                    print(f"Failed to retrieve conversations: {e}")
+                    break
+
+            retry_counter += 1
+            time.sleep(retry_delay * (2**retry_counter))
+
+        return all_conversations
+
+    def check_channel_exists(slack_channel: str, client) -> bool:
+        """
+        This function checks if the specified slack channel exists.
+
+        Parameters:
+            slack_channel (str): The name of the slack channel to be checked.
+            client (object): The Slack client interact with the Slack API.
+
+        Returns:
+            bool: True if the specified slack channel exists, False otherwise.
+        """
+        # TODO: In case channel doesnt exist, need to install the Slack app
+        try:
+            all_channels = list_all_conversations(client)
+            channels_names = [
+                (channel["name"], channel["id"]) for channel in all_channels
+            ]
+            print(f"List of slack channels: {channels_names}")
+            for channel in channels_names:
+                if channel[0] == slack_channel:
+                    print(f"Found Slack channel - name: {channel[0]}, id: {channel[1]}")
+                    return True
+
+            return False
+
+        except SlackApiError as e:
+            raise AirflowException(
+                f"Failed to check if Slack channel {slack_channel} exists: {e.response['error']}"
+            )
+
+    def get_bot_user_name(client) -> str:
+        """
+        This function retrieves the bot user name associated with the Slack token.
+
+        Returns:
+            str: The bot user name.
+        """
+        try:
+            response = client.auth_test()
+            if response["ok"]:
+                print(f"Bot user {response['user']}")
+                return response["user"]
+        except SlackApiError as e:
+            raise AirflowException(
+                f"Failed to retrieve bot user name: {e.response['error']}"
+            )
+        return ""  # TO BE REMOVED
+
+    def build_slack_message(context):
+        print("Strting to build Slack message")
+        task_instance = context["task_instance"]
+        dag_id = task_instance.dag_id
+        task_id = task_instance.task_id
+        dag_execution_date = context["dag_run"].logical_date
+        exception = context["exception"]
+
+        # Retrieve EC2 machine name
+        try:
+            ec2_machine_name = requests.get(
+                "http://169.254.169.254/latest/meta-data/hostname"
+            ).text
+        except requests.RequestException as e:
+            ec2_machine_name = "Unknown"
+
+        # Retrieve EC2 machine IP address
+        my_ip = requests.get("https://checkip.amazonaws.com").text.strip()
+
+        # Change local host to this machine ip
+        task_log_url = str(task_instance.log_url).replace("localhost", my_ip)
+
+        # TODO: Add abillity to send the pod stdout to slack
+
+        slack_message = f"""
+        *Name of EC2 Machine*: {ec2_machine_name} 
+        *Name of DAG*: {dag_id}
+        *Name of Task*: {task_id}
+        *Link to Log*: {task_log_url}
+        *Start Time of Running DAG*: {dag_execution_date}
+        *Start Time of Running Task*: {task_instance.start_date}
+        *Number of Tries of Task*: {task_instance.try_number}
+        ----------------------------
+        """
+
+        return slack_message
+
+    def build_slack_message_blocks(context):
+        print("Starting to build Slack message")
+        task_instance = context["task_instance"]
+        dag_id = task_instance.dag_id
+        task_id = task_instance.task_id
+        dag_execution_date = context["dag_run"].logical_date
+        exception = context["exception"]
+
+        # Retrieve EC2 machine name
+        try:
+            ec2_machine_name = requests.get(
+                "http://169.254.169.254/latest/meta-data/hostname"
+            ).text
+        except requests.RequestException as e:
+            ec2_machine_name = "Unknown"
+
+        # Retrieve EC2 machine IP address
+        my_ip = requests.get("https://checkip.amazonaws.com").text.strip()
+
+        # Change local host to this machine IP
+        task_log_url = str(task_instance.log_url).replace("localhost", my_ip)
+
+        # Create the blocks for the message
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*EC2 Machine:* " + ec2_machine_name,
+                },
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*DAG:* " + dag_id},
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*Task:* " + task_id},
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Start Time DAG:* " + str(dag_execution_date),
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Start Time Task:* " + str(task_instance.start_date),
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Number of Tries of Task:* "
+                    + str(task_instance.try_number),
+                },
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*Log:* " + task_log_url},
+            },
+        ]
+
+        # Convert the blocks to a JSON-encoded string
+        blocks_json = json.dumps(blocks)
+
+        return blocks_json
+
+    def send_slack_notification(context) -> bool:
+        """
+        This function sends a slack notification to the specified slack channel.
+
+        Parameters:
+            context (dict): A dictionary containing the following keys:
+                - dag_run (Airflow DAG run)
+                - task_instance (Airflow task instance)
+                - execution_date (str)
+                - slack_channel (str)
+
+        """
+        slack_token = os.environ.get("api_token")
+        if slack_token is None:
+            print("Missing Slack API token.")
+            return False
+        else:
+            print("Slack API token exists, getting to business")
+
+        slack_channel = (
+            os.getenv("ENV_PREFIX") + "-" + os.getenv("REGION") + "-gad-alerts"
+        )
+        print(f"Slack channel: {slack_channel}")
+        user_id = os.environ.get("user_id")
+
+        slack_message = build_slack_message_blocks(context)
+        # slack_channel = os.getenv("ENV_PREFIX") + "_alerts"
+        client = WebClient(token=slack_token)
+
+        # Get the name of the slack bot
+        bot_user_name = get_bot_user_name(client)
+
+        # Check if the specified slack channel exists. If not, create it.
+        print(f"Checking if Slack channel {slack_channel} exists...")
+
+        # if not check_channel_exists(slack_channel, client):
+        try:
+            response = client.conversations_create(name=slack_channel)
+
+            if response["ok"]:
+                channel_id = response["channel"]["id"]
+                print(f"New channel created. name: {slack_channel} id: {channel_id}")
+                if user_id is not None:
+                    print(f"Installing Slack app in channel '{slack_channel}'...")
+                    response = client.conversations_invite(
+                        channel=channel_id, users=user_id
+                    )
+                    if response["ok"]:
+                        print(
+                            f"Succeeded in inviting user {user_id} to channel {slack_channel}"
+                        )
+                    else:
+                        print(
+                            f"Failed in inviting user {user_id} to channel {slack_channel}"
+                        )
+
+            else:
+                print(f"Failed to create channel: {response['error']}")
+
+        except SlackApiError as e:
+            if str(e.response["error"]) == "name_taken":
+                print(f"Channel '{slack_channel}' already exists.")
+
+            else:
+                print(f"Error creating channel: {e.response['error']}")
+
+        # Try to send the message to the specified slack channel.
+
+        try:
+            response = client.chat_postMessage(
+                channel=slack_channel, blocks=slack_message, username=bot_user_name
+            )
+            if not response["ok"]:
+                raise AirflowException(
+                    f"Failed to send Slack notification: {response['error']}"
+                )
+        except SlackApiError as e:
+            raise AirflowException(
+                f"Failed to send Slack notification: {e.response['error']}"
+            )
+
     # dag creation
     dag = DAG(
         dag_id=dag_id,
@@ -389,6 +687,8 @@ def generate_airflow_dag(
                 python_callable=parse_xcoms,
                 op_args=[task["upstream"]],
                 dag=dag,
+                on_failure_callback=send_slack_notification,
+                provide_context=True,
             )
             kubernetes_tasks[task["task_id"]] = service_task
             last_service_task_id = task["task_id"]
@@ -416,6 +716,7 @@ def generate_airflow_dag(
                 arguments=arguments,
                 dag=dag,
                 do_xcom_push=is_xcom_push_task(task),
+                on_failure_callback=send_slack_notification,
             )
             kubernetes_tasks[task["task_id"]] = kubernetes_task
 
