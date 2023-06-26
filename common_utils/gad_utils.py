@@ -356,8 +356,8 @@ def generate_airflow_dag(
             SlackApiError: If an error occurs while retrieving conversations from Slack.
         """
         all_conversations = []
-        max_retries = 5
-        retry_delay = 2
+        max_retries = 1
+        retry_delay = 1
         retry_counter = 0
 
         while retry_counter < max_retries:
@@ -389,7 +389,7 @@ def generate_airflow_dag(
                     break
 
             retry_counter += 1
-            time.sleep(retry_delay * (2**retry_counter))
+            time.sleep(1)
 
         return all_conversations
 
@@ -446,7 +446,7 @@ def generate_airflow_dag(
         task_instance = context["task_instance"]
         dag_id = task_instance.dag_id
         task_id = task_instance.task_id
-        dag_execution_date = context["dag_run"].logical_date
+        dag_execution_date = context["dag_run"].start_date
         exception = context["exception"]
 
         # Retrieve EC2 machine name
