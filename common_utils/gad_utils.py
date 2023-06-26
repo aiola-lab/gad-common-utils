@@ -393,35 +393,35 @@ def generate_airflow_dag(
 
         return all_conversations
 
-    def check_channel_exists(slack_channel: str, client) -> bool:
+    def check_channel_exists(slack_channel: str, client) -> str:
         """
-        This function checks if the specified slack channel exists.
+        This function checks if the specified Slack channel exists and returns its ID if found.
 
         Parameters:
-            slack_channel (str): The name of the slack channel to be checked.
-            client (object): The Slack client interact with the Slack API.
+            slack_channel (str): The name of the Slack channel to be checked.
+            client (object): The Slack client to interact with the Slack API.
 
         Returns:
-            bool: True if the specified slack channel exists, False otherwise.
+            str: The ID of the Slack channel if it exists, or an empty string if not found.
         """
-        # TODO: In case channel doesnt exist, need to install the Slack app
         try:
             all_channels = list_all_conversations(client)
             channels_names = [
                 (channel["name"], channel["id"]) for channel in all_channels
             ]
-            print(f"List of slack channels: {channels_names}")
+            print(f"List of Slack channels: {channels_names}")
             for channel in channels_names:
                 if channel[0] == slack_channel:
                     print(f"Found Slack channel - name: {channel[0]}, id: {channel[1]}")
-                    return True
+                    return channel[1]
 
-            return False
+            return ""
 
         except SlackApiError as e:
-            raise AirflowException(
+            print(
                 f"Failed to check if Slack channel {slack_channel} exists: {e.response['error']}"
             )
+            return ""
 
     def get_bot_user_name(client) -> str:
         """
@@ -562,6 +562,7 @@ def generate_airflow_dag(
                 - slack_channel (str)
 
         """
+        channel_id = ""
         slack_token = os.environ.get("api_token")
         if slack_token is None:
             print("Missing Slack API token.")
@@ -584,37 +585,36 @@ def generate_airflow_dag(
 
         # Check if the specified slack channel exists. If not, create it.
         print(f"Checking if Slack channel {slack_channel} exists...")
+        channel_id = check_channel_exists(slack_channel, client)
+        if channel_id == "":
+            try:
+                response = client.conversations_create(name=slack_channel)
 
-        # if not check_channel_exists(slack_channel, client):
-        try:
-            response = client.conversations_create(name=slack_channel)
-
-            if response["ok"]:
-                channel_id = response["channel"]["id"]
-                print(f"New channel created. name: {slack_channel} id: {channel_id}")
-                if user_id is not None:
-                    print(f"Installing Slack app in channel '{slack_channel}'...")
-                    response = client.conversations_invite(
-                        channel=channel_id, users=user_id
+                if response["ok"]:
+                    channel_id = response["channel"]["id"]
+                    print(
+                        f"New channel created. name: {slack_channel} id: {channel_id}"
                     )
-                    if response["ok"]:
-                        print(
-                            f"Succeeded in inviting user {user_id} to channel {slack_channel}"
-                        )
-                    else:
-                        print(
-                            f"Failed in inviting user {user_id} to channel {slack_channel}"
-                        )
 
+                else:
+                    print(f"Failed to create channel: {response['error']}")
+
+            except SlackApiError as e:
+                if str(e.response["error"]) == "name_taken":
+                    print(f"Channel '{slack_channel}' already exists.")
+
+                else:
+                    print(f"Error creating channel: {e.response['error']}")
+
+        # Try to invite the user to the slack channel
+        if user_id is not None and channel_id != "":
+            response = client.conversations_invite(channel=channel_id, users=user_id)
+            if response["ok"]:
+                print(
+                    f"Succeeded in inviting user {user_id} to channel {slack_channel}"
+                )
             else:
-                print(f"Failed to create channel: {response['error']}")
-
-        except SlackApiError as e:
-            if str(e.response["error"]) == "name_taken":
-                print(f"Channel '{slack_channel}' already exists.")
-
-            else:
-                print(f"Error creating channel: {e.response['error']}")
+                print(f"Failed in inviting user {user_id} to channel {slack_channel}")
 
         # Try to send the message to the specified slack channel.
 
