@@ -41,6 +41,7 @@ def return_dag_ingrediants(content_path, project):
     DBT_OUTPUT_DIR = "/opt/airflow/logs"
     PYTHON_DIR = f"{PROJECT_DIR}/python"
     DBT_DIR = f"{PROJECT_DIR}/dbt"
+    GX_DIR = f"{PROJECT_DIR}/gx/checkpoints_executions"
     CONFIG_DIR = f"{PROJECT_DIR}/configuration"
 
     paths = {
@@ -50,6 +51,7 @@ def return_dag_ingrediants(content_path, project):
         "DBT_DIR": DBT_DIR,
         "DBT_OUTPUT_DIR": DBT_OUTPUT_DIR,
         "PYTHON_DIR": PYTHON_DIR,
+        "GX_DIR": GX_DIR,
         "CONFIG_DIR": CONFIG_DIR,
     }
 
@@ -124,6 +126,8 @@ def generate_airflow_dag(
             return "gad-dbt:0.1"
         elif task_type == "python":
             return "gad-papermill:0.1"
+        elif task_type == "gx":
+            return "gad-ge:0.1"
 
     def is_xcom_push_task(task_dict: dict):
         """
@@ -190,6 +194,8 @@ def generate_airflow_dag(
             return ["dbt", task_dict["executable"]]
         elif task_dict["task_type"] == "python":
             return ["python", f"{paths['PYTHON_DIR']}/{task_dict['executable']}.py"]
+        elif task_dict["task_type"] == "gx":
+            return ["python", f"{paths['GX_DIR']}/{task_dict['executable']}.py"]
 
     def return_command_args(task_dict: dict, xcom_pull_task_id: str) -> list:
         """Returns a list of command-line arguments based on task_dict and configs.
@@ -338,9 +344,6 @@ def generate_airflow_dag(
         for arg in args_to_use:
             if args_to_use[arg] != "":
                 kwargs["ti"].xcom_push(key=arg, value=args_to_use[arg])
-
-    # use only the params that are not empty
-    dag_params_not_empty = {key: val for key, val in dag_params.items() if val != ""}
 
     def list_all_conversations(client):
         """
@@ -640,6 +643,9 @@ def generate_airflow_dag(
         concurrency=10,
         params=dag_params,
     )
+
+    # use only the params that are not empty
+    dag_params_not_empty = {key: val for key, val in dag_params.items() if val != ""}
 
     """
     This code is a loop that iterates over a list of tasks and creates a KubernetesPodOperator object for each task.
