@@ -71,7 +71,7 @@ def return_dag_ingrediants(content_path, project):
         name="project-volume",
         mount_path="/opt/aiola/projects",
         sub_path=None,
-        read_only=True,
+        read_only=False,
     )
 
     volume = k8s.V1Volume(
@@ -705,6 +705,19 @@ def generate_airflow_dag(
             arguments = return_command_args(task, last_service_task_id)
             image = return_image_name(task["task_type"])
 
+            copy_gx_dir_container = k8s.V1Container(
+                name="copy-gx-dir",
+                image="busybox",
+                command=[
+                    "cp",
+                    "-r",
+                    "/opt/aiola/projects/gad-deliveries/ai_monitoring/gx",
+                    "/opt/airflow/",
+                ],
+                # volume_devices=volumes,
+                volume_mounts=volumes_mounts,
+            )
+
             kubernetes_task = KubernetesPodOperator(
                 volumes=volumes,
                 volume_mounts=volumes_mounts,
@@ -723,6 +736,7 @@ def generate_airflow_dag(
                 dag=dag,
                 do_xcom_push=is_xcom_push_task(task),
                 on_failure_callback=send_slack_notification,
+                init_containers=[copy_gx_dir_container],
             )
             kubernetes_tasks[task["task_id"]] = kubernetes_task
 
