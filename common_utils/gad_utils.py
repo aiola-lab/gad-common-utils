@@ -2,20 +2,18 @@ import ast
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import requests
-from airflow import DAG, settings
+from airflow import DAG
 from airflow.contrib.operators.kubernetes_pod_operator import KubernetesPodOperator
 from airflow.exceptions import AirflowException
-from airflow.models import TaskInstance
+from airflow.kubernetes.secret import Secret
 from airflow.operators.python_operator import PythonOperator
 from airflow.utils.dates import days_ago
-from kubernetes import client, config
 from kubernetes.client import models as k8s
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from sqlalchemy import func
 
 
 def return_dag_ingrediants(content_path, project):
@@ -704,6 +702,12 @@ def generate_airflow_dag(
             cmds = return_cmds(task)
             arguments = return_command_args(task, last_service_task_id)
             image = return_image_name(task["task_type"])
+            slack_api_token_secret = Secret(
+                deploy_type="env",
+                deploy_target="api_token",
+                secret="gad-slack-api-token",
+                key="api_token",
+            )
 
             kubernetes_task = KubernetesPodOperator(
                 volumes=volumes,
@@ -723,6 +727,7 @@ def generate_airflow_dag(
                 dag=dag,
                 do_xcom_push=is_xcom_push_task(task),
                 on_failure_callback=send_slack_notification,
+                secrets=[slack_api_token_secret],
             )
             kubernetes_tasks[task["task_id"]] = kubernetes_task
 
