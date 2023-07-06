@@ -2,20 +2,18 @@ import ast
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import requests
-from airflow import DAG, settings
+from airflow import DAG
 from airflow.contrib.operators.kubernetes_pod_operator import KubernetesPodOperator
 from airflow.exceptions import AirflowException
-from airflow.models import TaskInstance
+from airflow.kubernetes.secret import Secret
 from airflow.operators.python_operator import PythonOperator
 from airflow.utils.dates import days_ago
-from kubernetes import client, config
 from kubernetes.client import models as k8s
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from sqlalchemy import func
 
 
 def return_dag_ingrediants(content_path, project):
@@ -41,6 +39,7 @@ def return_dag_ingrediants(content_path, project):
     DBT_OUTPUT_DIR = "/opt/airflow/logs"
     PYTHON_DIR = f"{PROJECT_DIR}/python"
     DBT_DIR = f"{PROJECT_DIR}/dbt"
+    GX_DIR = f"{PROJECT_DIR}/gx/checkpoints_executions"
     CONFIG_DIR = f"{PROJECT_DIR}/configuration"
 
     paths = {
@@ -50,6 +49,7 @@ def return_dag_ingrediants(content_path, project):
         "DBT_DIR": DBT_DIR,
         "DBT_OUTPUT_DIR": DBT_OUTPUT_DIR,
         "PYTHON_DIR": PYTHON_DIR,
+        "GX_DIR": GX_DIR,
         "CONFIG_DIR": CONFIG_DIR,
     }
 
@@ -69,7 +69,7 @@ def return_dag_ingrediants(content_path, project):
         name="project-volume",
         mount_path="/opt/aiola/projects",
         sub_path=None,
-        read_only=True,
+        read_only=False,
     )
 
     volume = k8s.V1Volume(
@@ -124,6 +124,8 @@ def generate_airflow_dag(
             return "gad-dbt:0.1"
         elif task_type == "python":
             return "gad-papermill:0.1"
+        elif task_type == "gx":
+            return "gad-gx:0.1"
 
     def is_xcom_push_task(task_dict: dict):
         """
@@ -190,6 +192,8 @@ def generate_airflow_dag(
             return ["dbt", task_dict["executable"]]
         elif task_dict["task_type"] == "python":
             return ["python", f"{paths['PYTHON_DIR']}/{task_dict['executable']}.py"]
+        elif task_dict["task_type"] == "gx":
+            return ["python", f"{paths['GX_DIR']}/{task_dict['executable']}.py"]
 
     def return_command_args(task_dict: dict, xcom_pull_task_id: str) -> list:
         """Returns a list of command-line arguments based on task_dict and configs.
@@ -338,9 +342,6 @@ def generate_airflow_dag(
         for arg in args_to_use:
             if args_to_use[arg] != "":
                 kwargs["ti"].xcom_push(key=arg, value=args_to_use[arg])
-
-    # use only the params that are not empty
-    dag_params_not_empty = {key: val for key, val in dag_params.items() if val != ""}
 
     def list_all_conversations(client):
         """
@@ -641,6 +642,9 @@ def generate_airflow_dag(
         params=dag_params,
     )
 
+    # use only the params that are not empty
+    dag_params_not_empty = {key: val for key, val in dag_params.items() if val != ""}
+
     """
     This code is a loop that iterates over a list of tasks and creates a KubernetesPodOperator object for each task.
     return_command_args() function is used to obtain the command arguments for the task.
@@ -698,6 +702,12 @@ def generate_airflow_dag(
             cmds = return_cmds(task)
             arguments = return_command_args(task, last_service_task_id)
             image = return_image_name(task["task_type"])
+            slack_api_token_secret = Secret(
+                deploy_type="env",
+                deploy_target="api_token",
+                secret="gad-slack-api-token",
+                key="api_token",
+            )
 
             kubernetes_task = KubernetesPodOperator(
                 volumes=volumes,
@@ -717,6 +727,7 @@ def generate_airflow_dag(
                 dag=dag,
                 do_xcom_push=is_xcom_push_task(task),
                 on_failure_callback=send_slack_notification,
+                secrets=[slack_api_token_secret],
             )
             kubernetes_tasks[task["task_id"]] = kubernetes_task
 
