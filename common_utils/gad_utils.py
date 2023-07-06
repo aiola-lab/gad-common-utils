@@ -125,7 +125,7 @@ def generate_airflow_dag(
         elif task_type == "python":
             return "gad-papermill:0.1"
         elif task_type == "gx":
-            return "gad-ge:0.1"
+            return "gad-gx:0.1"
 
     def is_xcom_push_task(task_dict: dict):
         """
