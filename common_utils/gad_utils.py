@@ -39,7 +39,7 @@ def return_dag_ingrediants(content_path, project):
     DBT_OUTPUT_DIR = "/opt/airflow/logs"
     PYTHON_DIR = f"{PROJECT_DIR}/python"
     DBT_DIR = f"{PROJECT_DIR}/dbt"
-    GX_DIR = f"{PROJECT_DIR}/gx/checkpoints_executions"
+    GX_DIR = f"{PROJECT_DIR}/gx"
     CONFIG_DIR = f"{PROJECT_DIR}/configuration"
 
     paths = {
@@ -193,7 +193,10 @@ def generate_airflow_dag(
         elif task_dict["task_type"] == "python":
             return ["python", f"{paths['PYTHON_DIR']}/{task_dict['executable']}.py"]
         elif task_dict["task_type"] == "gx":
-            return ["python", f"{paths['GX_DIR']}/{task_dict['executable']}.py"]
+            return [
+                "python",
+                f"{paths['GX_DIR']}/checkpoints_executions/{task_dict['executable']}.py",
+            ]
 
     def return_command_args(task_dict: dict, xcom_pull_task_id: str) -> list:
         """Returns a list of command-line arguments based on task_dict and configs.
@@ -709,10 +712,16 @@ def generate_airflow_dag(
                 key="api_token",
             )
 
+            env_vars_to_pod = []
+            if task["task_type"] == "gx":
+                env_vars_to_pod.append(
+                    {"name": "GX_ROOT_DIR", "value": paths["GX_DIR"]}
+                )
+
             kubernetes_task = KubernetesPodOperator(
                 volumes=volumes,
                 volume_mounts=volumes_mounts,
-                env_vars=[],
+                env_vars=env_vars_to_pod,
                 env_from=[envConfigMap],
                 namespace="default",
                 labels={"Task": task["task_type"]},
